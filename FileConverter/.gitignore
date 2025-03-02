@@ -1,0 +1,5 @@
+# FFmpeg executables
+**/ffmpeg.exe
+**/ffplay.exe
+**/ffprobe.exe
+FileConverter/ffmpeg/*.exe 

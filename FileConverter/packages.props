@@ -1,0 +1,44 @@
+# Список пакетов, которые необходимо добавить для новой функциональности
+
+# Основные зависимости
+Npgsql.EntityFrameworkCore.PostgreSQL
+Microsoft.EntityFrameworkCore.Tools
+Hangfire.AspNetCore
+Hangfire.PostgreSql
+Hangfire.MemoryStorage
+
+# Кэширование и оптимизация
+Microsoft.Extensions.Caching.Memory
+System.Runtime.Caching
+
+# Мониторинг и метрики
+Microsoft.Extensions.Diagnostics.HealthChecks
+Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore
+AspNetCore.HealthChecks.UI
+AspNetCore.HealthChecks.UI.Client
+AspNetCore.HealthChecks.Npgsql
+
+# Обработка ошибок и логирование
+Serilog.AspNetCore
+Serilog.Enrichers.Environment
+Serilog.Enrichers.Thread
+Serilog.Enrichers.Process
+Serilog.Sinks.Console
+Serilog.Sinks.File
+Serilog.Sinks.Async
+Serilog.Sinks.PostgreSQL
+
+# HTTP и устойчивость
+Microsoft.Extensions.Http.Polly
+Polly
+Polly.Extensions.Http
+Microsoft.AspNetCore.RateLimiting
+
+# Производительность
+System.Threading.Channels
+System.Threading.Tasks.Dataflow
+Ben.Demystifier
+
+# Установить через NuGet Package Manager в Visual Studio или выполнить:
+# dotnet add package [имя_пакета]
+# для каждой строки выше 
