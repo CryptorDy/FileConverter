@@ -9,6 +9,9 @@ namespace FileConverter.Services
         
         // Максимальный размер файла для скачивания (по умолчанию 500 МБ)
         private readonly long _maxFileSize;
+        
+        // Список разрешенных типов контента из конфигурации
+        private readonly HashSet<string> _allowedContentTypes;
 
         public UrlValidator(ILogger<UrlValidator> logger, IConfiguration configuration)
         {
@@ -19,9 +22,16 @@ namespace FileConverter.Services
             _maxFileSize = long.TryParse(_configuration["FileConverter:MaxFileSizeBytes"], out long maxSize)
                 ? maxSize
                 : 500L * 1024 * 1024; // 500 МБ по умолчанию
+            
+            // Загружаем список разрешенных типов контента из конфигурации
+            _allowedContentTypes = new HashSet<string>(
+                _configuration.GetSection("FileConverter:AllowedFileTypes").Get<string[]>() ?? 
+                new[] { "video/mp4", "video/webm", "audio/mpeg", "audio/mp4" }
+            );
                 
             _logger.LogInformation($"Инициализирован валидатор URL. " +
-                                  $"Максимальный размер файла: {_maxFileSize / (1024.0 * 1024):F2} МБ");
+                                  $"Максимальный размер файла: {_maxFileSize / (1024.0 * 1024):F2} МБ, " +
+                                  $"Разрешенные типы контента: {string.Join(", ", _allowedContentTypes)}");
         }
 
         /// <summary>
@@ -49,29 +59,29 @@ namespace FileConverter.Services
                 // Проверка на локальные адреса (localhost, 127.0.0.1 и т.д.)
                 if (IsLocalHost(uri))
                 {
-                    _logger.LogWarning($"Обнаружен локальный адрес: {url}");
-                    return false;
-                }
-                
-                // Проверка на IP-адреса
-                if (IsIpAddress(uri.Host))
-                {
-                    _logger.LogWarning($"Обнаружен IP-адрес: {url}");
+                    _logger.LogWarning($"Запрещен доступ к локальным адресам: {url}");
                     return false;
                 }
                 
                 // Проверка на потенциально опасные файлы
                 if (IsPotentiallyDangerousFile(url))
                 {
-                    _logger.LogWarning($"Потенциально опасный файл: {url}");
+                    _logger.LogWarning($"Потенциально опасный тип файла: {url}");
                     return false;
+                }
+                
+                // Особая обработка для социальных сетей
+                if (IsSocialMediaUrl(uri))
+                {
+                    _logger.LogInformation($"Обнаружен URL социальной сети: {uri.Host}. Возможно потребуются особые заголовки для доступа.");
+                    // Мы разрешаем URL социальных сетей, но предупреждаем о возможных проблемах
                 }
                 
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при валидации URL: {url}");
+                _logger.LogError(ex, $"Ошибка при проверке URL: {url}");
                 return false;
             }
         }
@@ -131,9 +141,32 @@ namespace FileConverter.Services
                 
                 string contentType = response.Content.Headers.ContentType?.MediaType ?? "";
                 
-                // Проверяем, является ли тип контента видео- или аудиофайлом
-                if (string.IsNullOrEmpty(contentType) || 
-                    !(contentType.StartsWith("video/") || contentType.StartsWith("audio/")))
+                // Проверяем по списку разрешенных типов контента
+                if (string.IsNullOrEmpty(contentType))
+                {
+                    _logger.LogWarning($"Пустой тип контента для {url}");
+                    return (false, "empty");
+                }
+                
+                // Специальная обработка для text/plain - это может быть неправильный тип от некоторых серверов
+                if (contentType == "text/plain")
+                {
+                    // Проверим расширение файла в URL
+                    Uri uri = new Uri(url);
+                    string filename = Path.GetFileName(uri.LocalPath);
+                    string extension = Path.GetExtension(filename).ToLowerInvariant();
+                    
+                    // Если у файла расширение видео или аудио, разрешаем его несмотря на тип контента
+                    if (!string.IsNullOrEmpty(extension) && 
+                        (extension == ".mp4" || extension == ".mov" || extension == ".mp3" || 
+                         extension == ".avi" || extension == ".webm" || extension == ".ogg"))
+                    {
+                        _logger.LogWarning($"Получен text/plain для {url}, но у файла расширение {extension}. Разрешаем загрузку.");
+                        return (true, $"video/{extension.TrimStart('.')}");
+                    }
+                }
+                
+                if (!_allowedContentTypes.Contains(contentType))
                 {
                     _logger.LogWarning($"Недопустимый тип контента для {url}: {contentType}");
                     return (false, contentType);
@@ -145,7 +178,7 @@ namespace FileConverter.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Ошибка при проверке типа контента: {url}");
-                return (false, "");
+                return (false, "error");
             }
         }
         
@@ -190,6 +223,25 @@ namespace FileConverter.Services
             };
             
             return dangerousExtensions.Contains(extension);
+        }
+        
+        /// <summary>
+        /// Определяет, принадлежит ли URL социальной сети или видеохостингу
+        /// </summary>
+        private bool IsSocialMediaUrl(Uri uri)
+        {
+            string host = uri.Host.ToLowerInvariant();
+            
+            // Список доменов социальных сетей и видеохостингов
+            string[] socialMediaDomains = new[]
+            {
+                "instagram.com", "fbcdn.net", "facebook.com", 
+                "youtube.com", "youtu.be", "vimeo.com",
+                "tiktok.com", "twitter.com", "twimg.com",
+                "pinterest.com", "snapchat.com", "linkedin.com"
+            };
+            
+            return socialMediaDomains.Any(domain => host.Contains(domain));
         }
     }
 } 

@@ -85,7 +85,7 @@ namespace FileConverter.Services
             }
         }
 
-        public async Task<List<ConversionJobResponse>> EnqueueBatchJobs(List<string> videoUrls)
+        public async Task<BatchJobResult> EnqueueBatchJobs(List<string> videoUrls)
         {
             try
             {
@@ -103,7 +103,12 @@ namespace FileConverter.Services
                 // Сохраняем связь партии с задачами
                 _batches.TryAdd(batchId, jobIds);
 
-                return jobResponses;
+                // Возвращаем результат с ID пакета
+                return new BatchJobResult
+                {
+                    BatchId = batchId,
+                    Jobs = jobResponses
+                };
             }
             catch (Exception ex)
             {

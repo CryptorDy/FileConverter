@@ -79,31 +79,32 @@ namespace FileConverter.Services
                         
                         if (deleted)
                         {
-                            // Очищаем URL в базе данных
-                            job.Mp3Url = null;
-                            await _jobRepository.UpdateJobAsync(job);
-                            
                             deletedCount++;
-                            _logger.LogInformation($"MP3 файл успешно удален: {job.Id}");
                         }
                         else
                         {
-                            errorCount++;
                             _logger.LogWarning($"Не удалось удалить MP3 файл: {job.Mp3Url}");
+                            errorCount++;
                         }
                     }
                     catch (Exception ex)
                     {
+                        _logger.LogError(ex, $"Ошибка при удалении MP3 файла: {job.Mp3Url}");
                         errorCount++;
-                        _logger.LogError(ex, $"Ошибка при удалении MP3 файла {job.Mp3Url}: {ex.Message}");
                     }
                 }
-
-                _logger.LogInformation($"Очистка MP3 файлов завершена. Удалено: {deletedCount}, Ошибок: {errorCount}");
+                
+                _logger.LogInformation($"Очистка MP3 файлов завершена. Удалено: {deletedCount}, ошибок: {errorCount}");
+            }
+            catch (Exception ex) when (ex.Message.Contains("relation") && ex.Message.Contains("does not exist"))
+            {
+                // Обработка ошибки, когда таблица не существует (еще не создана через миграцию)
+                _logger.LogWarning("Таблица ConversionJobs еще не создана, пропускаем очистку MP3: {ErrorMessage}", ex.Message);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при выполнении задания очистки MP3 файлов: {ex.Message}");
+                _logger.LogError(ex, "Непредвиденная ошибка при очистке MP3 файлов");
+                throw; // Позволяем Hangfire повторить задачу
             }
         }
     }

@@ -35,11 +35,15 @@ namespace FileConverter.Controllers
 
                 _logger.LogInformation($"Получен запрос на конвертацию {request.VideoUrls.Count} видео");
                 
-                var jobResponses = await _jobManager.EnqueueBatchJobs(request.VideoUrls);
+                // Получаем результат создания пакета задач
+                var jobManagerResult = await _jobManager.EnqueueBatchJobs(request.VideoUrls);
                 
+                // Создаем объект ответа
                 var batchResponse = new BatchConversionResponse
                 {
-                    Jobs = jobResponses
+                    // Используем ID пакета из первой задачи (все задачи в пакете имеют один BatchId)
+                    BatchId = jobManagerResult.BatchId,
+                    Jobs = jobManagerResult.Jobs
                 };
                 
                 batchResponse.BatchStatusUrl = $"{Request.Scheme}://{Request.Host}/api/videoconverter/batch-status/{batchResponse.BatchId}";

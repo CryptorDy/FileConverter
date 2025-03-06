@@ -1,4 +1,5 @@
 using Xabe.FFmpeg;
+using Microsoft.Extensions.Configuration;
 
 namespace FileConverter.Services
 {
@@ -7,18 +8,35 @@ namespace FileConverter.Services
         private readonly IS3StorageService _s3StorageService;
         private readonly ILogger<FileConverterService> _logger;
         private readonly string _tempPath;
+        private readonly IConfiguration _configuration;
 
         public FileConverterService(
             IS3StorageService s3StorageService,
-            ILogger<FileConverterService> logger)
+            ILogger<FileConverterService> logger,
+            IConfiguration configuration)
         {
             _s3StorageService = s3StorageService;
             _logger = logger;
+            _configuration = configuration;
             _tempPath = Path.Combine(Path.GetTempPath(), "AiDiscussion", "Conversions");
             Directory.CreateDirectory(_tempPath);
             
-            // Используем папку ffmpeg, которая содержит исполняемые файлы FFmpeg
-            FFmpeg.SetExecutablesPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ffmpeg"));
+            // Получаем путь к ffmpeg из конфигурации, с запасным вариантом
+            string ffmpegPath = _configuration["AppSettings:FFmpegPath"] ?? "/usr/bin";
+            _logger.LogInformation("Используется путь к FFmpeg для Linux: {Path}", ffmpegPath);
+            
+            // На Linux используются исполняемые файлы без расширения .exe
+            FFmpeg.SetExecutablesPath(ffmpegPath);
+            
+            // Проверяем существование файлов FFmpeg
+            string ffmpegExe = Path.Combine(ffmpegPath, "ffmpeg");
+            string ffprobeExe = Path.Combine(ffmpegPath, "ffprobe");
+            
+            if (!File.Exists(ffmpegExe))
+                _logger.LogWarning("Исполняемый файл ffmpeg не найден по пути: {Path}", ffmpegExe);
+            
+            if (!File.Exists(ffprobeExe))
+                _logger.LogWarning("Исполняемый файл ffprobe не найден по пути: {Path}", ffprobeExe);
         }
 
         public async Task<List<string>> FromVideoToMP3Async(List<string> sourceUrls)

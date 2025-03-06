@@ -15,18 +15,50 @@ namespace FileConverter.Services
             _configuration = configuration;
             
             // Получаем базовый путь для временных файлов (по умолчанию в temp директории)
-            _baseTempPath = _configuration["FileConverter:TempDirectory"] 
-                ?? Path.Combine(Path.GetTempPath(), "FileConverter", "Temp");
+            string configPath = _configuration["FileConverter:TempDirectory"];
+            
+            // Проверяем, что путь из конфигурации не пустой
+            if (!string.IsNullOrEmpty(configPath))
+            {
+                _baseTempPath = configPath;
+                _logger.LogInformation("Используем путь для временных файлов из конфигурации: {Path}", _baseTempPath);
+            }
+            else
+            {
+                // Используем стандартную временную директорию
+                _baseTempPath = Path.Combine(Path.GetTempPath(), "FileConverter", "Temp");
+                _logger.LogInformation("Путь к временным файлам не указан в конфигурации, используем стандартный: {Path}", _baseTempPath);
+            }
                 
             // Максимальный размер директории временных файлов (по умолчанию 10 ГБ)
             _maxTotalSizeBytes = long.TryParse(_configuration["FileConverter:MaxTempSizeBytes"], out long maxSize) 
                 ? maxSize 
                 : 10L * 1024 * 1024 * 1024; // 10 ГБ
-                
-            // Создаем директорию, если она не существует
-            Directory.CreateDirectory(_baseTempPath);
             
-            _logger.LogInformation($"Инициализирован менеджер временных файлов. Директория: {_baseTempPath}, максимальный размер: {_maxTotalSizeBytes / (1024 * 1024 * 1024.0):F2} ГБ");
+            try
+            {
+                // Создаем директорию, если она не существует
+                if (!Directory.Exists(_baseTempPath))
+                {
+                    Directory.CreateDirectory(_baseTempPath);
+                    _logger.LogInformation("Создана директория для временных файлов: {Path}", _baseTempPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Если не удалось создать указанную директорию, используем запасной вариант
+                _logger.LogError(ex, "Не удалось создать директорию {Path} для временных файлов", _baseTempPath);
+                
+                // Используем другой путь в качестве запасного варианта
+                _baseTempPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Temp");
+                _logger.LogWarning("Используем запасной путь для временных файлов: {Path}", _baseTempPath);
+                
+                // Создаем запасную директорию
+                Directory.CreateDirectory(_baseTempPath);
+            }
+            
+            _logger.LogInformation("Инициализирован менеджер временных файлов. Директория: {Path}, максимальный размер: {Size:F2} ГБ", 
+                _baseTempPath, _maxTotalSizeBytes / (1024 * 1024 * 1024.0));
         }
 
         public string GetTempDirectory()

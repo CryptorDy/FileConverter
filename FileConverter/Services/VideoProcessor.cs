@@ -192,13 +192,21 @@ namespace FileConverter.Services
                     
                     _logger.LogInformation($"Начало загрузки видео для задачи {jobId}: {videoUrl}");
                     
-                    // Обновляем статус
-                    await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Downloading);
+                    try
+                    {
+                        // Обновляем статус
+                        await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Downloading);
+                    }
+                    catch (Exception statusEx)
+                    {
+                        _logger.LogError(statusEx, "Ошибка при обновлении статуса задачи {JobId} на Downloading. Продолжаем обработку.", jobId);
+                    }
                     
                     // Проверяем тип контента
                     var contentTypeResult = await _urlValidator.IsContentTypeValid(videoUrl);
                     if (!contentTypeResult.isValid)
                     {
+                        _logger.LogWarning($"Недопустимый тип контента для {videoUrl}: {contentTypeResult.contentType}");
                         throw new InvalidOperationException($"Недопустимый тип контента: {contentTypeResult.contentType}");
                     }
                     
@@ -208,7 +216,15 @@ namespace FileConverter.Services
                     
                     using (var httpClient = new HttpClient())
                     {
-                        httpClient.DefaultRequestHeaders.Add("User-Agent", "FileConverter/1.0");
+                        httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
+                        
+                        // Добавляем заголовки для обхода ограничений социальных сетей
+                        httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+                        httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9,ru;q=0.8");
+                        httpClient.DefaultRequestHeaders.Add("Referer", "https://www.instagram.com/");
+                        httpClient.DefaultRequestHeaders.Add("sec-ch-ua", "\"Google Chrome\";v=\"123\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"123\"");
+                        httpClient.DefaultRequestHeaders.Add("sec-ch-ua-mobile", "?0");
+                        httpClient.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
                         
                         byte[] fileData;
                         
@@ -219,22 +235,59 @@ namespace FileConverter.Services
                         }
                         else
                         {
-                            using var response = await httpClient.GetAsync(videoUrl, HttpCompletionOption.ResponseHeadersRead);
-                            response.EnsureSuccessStatusCode();
-                            fileData = await response.Content.ReadAsByteArrayAsync();
-                            _logger.LogInformation($"Видео загружено по URL: {videoUrl}");
+                            try
+                            {
+                                using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
+                                using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                                
+                                // Обрабатываем различные коды ошибок
+                                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                                {
+                                    // Для Instagram и других социальных сетей, которые блокируют прямой доступ
+                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямую загрузку: {videoUrl}");
+                                }
+                                else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                                {
+                                    throw new InvalidOperationException($"Файл не найден (404 Not Found): {videoUrl}");
+                                }
+                                else if (!response.IsSuccessStatusCode)
+                                {
+                                    throw new InvalidOperationException($"Ошибка HTTP при загрузке: {(int)response.StatusCode} {response.ReasonPhrase}");
+                                }
+                                
+                                fileData = await response.Content.ReadAsByteArrayAsync();
+                                _logger.LogInformation($"Видео загружено по URL: {videoUrl}");
+                            }
+                            catch (HttpRequestException httpEx)
+                            {
+                                if (httpEx.Message.Contains("403"))
+                                {
+                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL требует авторизации: {videoUrl}", httpEx);
+                                }
+                                else
+                                {
+                                    throw new InvalidOperationException($"Ошибка HTTP при загрузке: {httpEx.Message}", httpEx);
+                                }
+                            }
                         }
                         
                         await File.WriteAllBytesAsync(videoPath, fileData);
                         
-                        // Обновляем задачу с размером файла и типом контента
-                        var job = await _repository.GetJobByIdAsync(jobId);
-                        if (job != null)
+                        try
                         {
-                            job.FileSizeBytes = fileData.Length;
-                            job.ContentType = contentTypeResult.contentType;
-                            job.TempVideoPath = videoPath;
-                            await _repository.UpdateJobAsync(job);
+                            // Обновляем задачу с размером файла и типом контента
+                            var job = await _repository.GetJobByIdAsync(jobId);
+                            if (job != null)
+                            {
+                                job.FileSizeBytes = fileData.Length;
+                                job.ContentType = contentTypeResult.contentType;
+                                job.TempVideoPath = videoPath;
+                                await _repository.UpdateJobAsync(job);
+                            }
+                        }
+                        catch (Exception updateEx)
+                        {
+                            _logger.LogError(updateEx, "Ошибка при обновлении информации о файле для задачи {JobId}. Продолжаем обработку.", jobId);
                         }
                     }
                     
@@ -245,11 +298,30 @@ namespace FileConverter.Services
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, $"Ошибка загрузки видео для задачи {jobId}: {videoUrl}");
-                    await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                        errorMessage: $"Ошибка загрузки видео: {ex.Message}");
                     
-                    // Очищаем временные файлы
-                    _tempFileManager.DeleteTempFile(videoPath);
+                    try
+                    {
+                        await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
+                            errorMessage: $"Ошибка загрузки видео: {ex.Message}");
+                    }
+                    catch (Exception updateEx)
+                    {
+                        _logger.LogError(updateEx, "Не удалось обновить статус задачи {JobId} на Failed после ошибки загрузки", jobId);
+                    }
+                    
+                    // Очищаем временные файлы в случае ошибки
+                    try 
+                    {
+                        if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
+                        {
+                            File.Delete(videoPath);
+                            _logger.LogInformation($"Удален временный файл после ошибки: {videoPath}");
+                        }
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        _logger.LogError(cleanupEx, "Ошибка при удалении временного файла: {Path}", videoPath);
+                    }
                 }
             }
         }

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace FileConverter.Models
 {
     public class ConversionJob
@@ -5,7 +7,10 @@ namespace FileConverter.Models
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string VideoUrl { get; set; } = string.Empty;
         public string? Mp3Url { get; set; }
+        
+        [JsonConverter(typeof(JsonStringEnumConverter))]
         public ConversionStatus Status { get; set; } = ConversionStatus.Pending;
+        
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? CompletedAt { get; set; }
         public string? ErrorMessage { get; set; }
@@ -27,6 +32,7 @@ namespace FileConverter.Models
         public DateTime? LastAttemptAt { get; set; }
     }
 
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public enum ConversionStatus
     {
         Pending,

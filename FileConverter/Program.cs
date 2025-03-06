@@ -10,6 +10,7 @@ using System.Threading.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Http;  // Для HttpClient
+using Microsoft.AspNetCore.Hosting; // Для UseUrls
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -55,6 +56,9 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(5);
 });
 
+// Явно указываем URL для прослушивания, чтобы избежать конфликта портов
+builder.WebHost.UseUrls("http://0.0.0.0:5039");
+
 // Настройка контекста базы данных
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(
@@ -64,11 +68,19 @@ builder.Services.AddDbContext<AppDbContext>(options =>
             npgsqlOptions.EnableRetryOnFailure(3);
             npgsqlOptions.CommandTimeout(60); // Увеличиваем таймаут команды до 60 сек
         }
-    )
-);
+    ), 
+    ServiceLifetime.Transient); // Изменяем срок жизни контекста для предотвращения проблем с уничтоженным контекстом
+
+// Добавляем фабрику контекста базы данных
+builder.Services.AddSingleton<DbContextFactory>();
 
 // Add services to the container.
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options => 
+    {
+        // Настраиваем сериализацию enum как строк
+        options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
+    });
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -103,7 +115,8 @@ builder.Services.AddHangfire(config =>
             PrepareSchemaIfNecessary = true,
             QueuePollInterval = TimeSpan.FromSeconds(15),
             InvisibilityTimeout = TimeSpan.FromMinutes(5),
-            DistributedLockTimeout = TimeSpan.FromMinutes(5)
+            DistributedLockTimeout = TimeSpan.FromMinutes(5),
+            SchemaName = "public"
         });
     }
     else
@@ -246,13 +259,21 @@ var app = builder.Build();
 ServiceActivator.Configure(app.Services);
 
 // Миграция базы данных при запуске
-if (app.Environment.IsProduction())
+// Применяем миграции во всех окружениях
+using (var scope = app.Services.CreateScope())
 {
-    // В продакшене проверяем и применяем миграции автоматически
-    using (var scope = app.Services.CreateScope())
+    try
     {
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        app.Logger.LogInformation("Запуск миграции базы данных...");
         dbContext.Database.Migrate();
+        app.Logger.LogInformation("Миграция базы данных успешно завершена");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "Ошибка при миграции базы данных");
+        // В случае критических ошибок можно прервать запуск приложения
+        // throw;
     }
 }
 

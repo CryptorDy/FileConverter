@@ -1,15 +1,16 @@
+﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
-namespace FileConverter.Data
+#nullable disable
+
+namespace FileConverter.Migrations
 {
-    /// <summary>
-    /// Начальная миграция для создания базы данных
-    /// </summary>
-    public partial class InitialMigration : Migration
+    /// <inheritdoc />
+    public partial class init : Migration
     {
+        /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Создаем таблицу для BatchJob
             migrationBuilder.CreateTable(
                 name: "BatchJobs",
                 columns: table => new
@@ -23,7 +24,6 @@ namespace FileConverter.Data
                     table.PrimaryKey("PK_BatchJobs", x => x.Id);
                 });
 
-            // Создаем таблицу для ConversionJob
             migrationBuilder.CreateTable(
                 name: "ConversionJobs",
                 columns: table => new
@@ -37,7 +37,7 @@ namespace FileConverter.Data
                     ErrorMessage = table.Column<string>(type: "text", nullable: true),
                     BatchId = table.Column<string>(type: "text", nullable: true),
                     FileSizeBytes = table.Column<long>(type: "bigint", nullable: true),
-                    ContentType = table.Column<string>(type: "varchar", maxLength: 100, nullable: true),
+                    ContentType = table.Column<string>(type: "text", nullable: true),
                     ProcessingAttempts = table.Column<int>(type: "integer", nullable: false),
                     LastAttemptAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
                 },
@@ -52,34 +52,30 @@ namespace FileConverter.Data
                         onDelete: ReferentialAction.SetNull);
                 });
 
-            // Создаем индекс для BatchId
             migrationBuilder.CreateIndex(
                 name: "IX_ConversionJobs_BatchId",
                 table: "ConversionJobs",
                 column: "BatchId");
 
-            // Создаем индекс для Status
-            migrationBuilder.CreateIndex(
-                name: "IX_ConversionJobs_Status",
-                table: "ConversionJobs",
-                column: "Status");
-
-            // Создаем индекс для CreatedAt
             migrationBuilder.CreateIndex(
                 name: "IX_ConversionJobs_CreatedAt",
                 table: "ConversionJobs",
                 column: "CreatedAt");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ConversionJobs_Status",
+                table: "ConversionJobs",
+                column: "Status");
         }
 
+        /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // Удаляем таблицу ConversionJobs
             migrationBuilder.DropTable(
                 name: "ConversionJobs");
 
-            // Удаляем таблицу BatchJobs
             migrationBuilder.DropTable(
                 name: "BatchJobs");
         }
     }
-} 
+}

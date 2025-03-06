@@ -1,6 +1,7 @@
 using FileConverter.Data;
 using FileConverter.Models;
 using Hangfire;
+using Microsoft.Extensions.Logging;
 
 namespace FileConverter.Services
 {
@@ -84,12 +85,12 @@ namespace FileConverter.Services
             }
         }
 
-        public async Task<List<ConversionJobResponse>> EnqueueBatchJobs(List<string> videoUrls)
+        public async Task<BatchJobResult> EnqueueBatchJobs(List<string> videoUrls)
         {
             try
             {
                 var batchJob = new BatchJob();
-                await _repository.CreateBatchAsync(batchJob);
+                await _repository.CreateBatchJobAsync(batchJob);
                 
                 var jobResponses = new List<ConversionJobResponse>();
                 string apiBaseUrl = _configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
@@ -139,7 +140,12 @@ namespace FileConverter.Services
                     }
                 }
 
-                return jobResponses;
+                // Возвращаем результат с ID пакета
+                return new BatchJobResult
+                {
+                    BatchId = batchJob.Id,
+                    Jobs = jobResponses
+                };
             }
             catch (Exception ex)
             {
@@ -224,6 +230,10 @@ namespace FileConverter.Services
             string? mp3Url = null, 
             string? errorMessage = null)
         {
+            // Создаем логгер для использования в случае ошибок
+            using var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole());
+            var logger = loggerFactory.CreateLogger("DbJobManager");
+            
             try
             {
                 var job = await repository.UpdateJobStatusAsync(jobId, status, mp3Url, errorMessage);
@@ -234,11 +244,36 @@ namespace FileConverter.Services
                     cacheManager.CacheMp3Url(job.VideoUrl, mp3Url);
                 }
             }
+            catch (ObjectDisposedException ex)
+            {
+                // Обрабатываем ошибку доступа к disposed контексту
+                logger.LogError(ex, "Ошибка при обновлении статуса задачи {JobId}: Context был уничтожен. Статус: {Status}", 
+                    jobId, status);
+                
+                // В этом случае мы не можем обновить статус задачи через базу данных,
+                // но можем кэшировать результат, если это требуется
+                if (status == ConversionStatus.Completed && mp3Url != null)
+                {
+                    try
+                    {
+                        // Просто сохраняем в кэш с примерным ключом
+                        // Поскольку у нас нет возможности получить видео URL из уничтоженного контекста
+                        // мы используем jobId как часть ключа
+                        string estimatedKey = $"job_{jobId}";
+                        logger.LogWarning("Сохраняем URL MP3 в кэш под примерным ключом: {Key}", estimatedKey);
+                        cacheManager.CacheMp3Url(estimatedKey, mp3Url);
+                    }
+                    catch (Exception cacheEx)
+                    {
+                        logger.LogError(cacheEx, "Не удалось обновить кэш для задачи {JobId}", jobId);
+                    }
+                }
+            }
             catch (Exception ex)
             {
-                // Логирование здесь не доступно, но реально нужно добавить
-                // В рабочей среде использовать глобальный логгер или обработку ошибок
-                Console.WriteLine($"Ошибка при обновлении статуса задачи {jobId}: {ex.Message}");
+                // Обработка других ошибок
+                logger.LogError(ex, "Ошибка при обновлении статуса задачи {JobId}: {ErrorMessage}", 
+                    jobId, ex.Message);
             }
         }
     }

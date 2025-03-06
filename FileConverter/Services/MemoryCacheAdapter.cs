@@ -65,6 +65,16 @@ namespace FileConverter.Services
                     }
                 }
 
+                // Устанавливаем размер кеша, если значение не null
+                if (value != null)
+                {
+                    memoryCacheOptions.SetSize(value.Length);
+                }
+                else
+                {
+                    memoryCacheOptions.SetSize(1); // Минимальный размер для null значений
+                }
+
                 _memoryCache.Set(key, value, memoryCacheOptions);
             }
             catch (Exception ex)
