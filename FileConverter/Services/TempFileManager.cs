@@ -98,8 +98,15 @@ namespace FileConverter.Services
 
         public void DeleteTempFile(string? filePath)
         {
-            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            if (string.IsNullOrEmpty(filePath))
             {
+                _logger.LogWarning("Попытка удалить файл с пустым путем");
+                return;
+            }
+
+            if (!File.Exists(filePath))
+            {
+                _logger.LogWarning($"Файл не существует: {filePath}");
                 return;
             }
             
@@ -109,16 +116,24 @@ namespace FileConverter.Services
                 if (IsInTempDirectory(filePath))
                 {
                     File.Delete(filePath);
-                    _logger.LogDebug($"Удален временный файл: {filePath}");
+                    _logger.LogInformation($"Удален временный файл: {filePath}");
                 }
                 else
                 {
-                    _logger.LogWarning($"Попытка удалить файл вне директории временных файлов: {filePath}");
+                    _logger.LogWarning($"Попытка удалить файл вне директории временных файлов: {filePath}. Базовая директория: {_baseTempPath}");
                 }
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, $"Отказано в доступе при удалении файла: {filePath}. Проверьте права доступа.");
+            }
+            catch (IOException ex)
+            {
+                _logger.LogError(ex, $"Ошибка ввода-вывода при удалении файла: {filePath}. Возможно файл используется другим процессом.");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при удалении временного файла: {filePath}");
+                _logger.LogError(ex, $"Неизвестная ошибка при удалении временного файла: {filePath}");
             }
         }
 
@@ -267,11 +282,30 @@ namespace FileConverter.Services
 
         private bool IsInTempDirectory(string filePath)
         {
-            // Проверяем, находится ли файл в нашей директории
-            string fullPath = Path.GetFullPath(filePath);
-            string fullTempPath = Path.GetFullPath(_baseTempPath);
-            
-            return fullPath.StartsWith(fullTempPath, StringComparison.OrdinalIgnoreCase);
+            try
+            {
+                // Проверяем, находится ли файл в нашей директории
+                string fullPath = Path.GetFullPath(filePath);
+                string fullTempPath = Path.GetFullPath(_baseTempPath);
+                
+                // Нормализуем пути для сравнения
+                fullPath = fullPath.Replace('\\', '/').TrimEnd('/');
+                fullTempPath = fullTempPath.Replace('\\', '/').TrimEnd('/');
+                
+                bool isInTempDir = fullPath.StartsWith(fullTempPath, StringComparison.OrdinalIgnoreCase);
+                
+                if (!isInTempDir)
+                {
+                    _logger.LogWarning($"Попытка доступа к файлу вне временной директории. Файл: {fullPath}, Временная директория: {fullTempPath}");
+                }
+                
+                return isInTempDir;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Ошибка при проверке принадлежности файла к временной директории: {filePath}");
+                return false;
+            }
         }
 
         private void EnsureSpaceAvailable(long requiredBytes)

@@ -92,7 +92,7 @@ namespace FileConverter.Services
             {
                 // Проверяем, является ли URL локальным файлом
                 if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && 
-                    uri.Host.Contains("localhost"))
+                    (uri.Host.Contains("localhost") || uri.Host == "94.241.171.236"))
                 {
                     string fileName = Path.GetFileName(uri.LocalPath);
                     if (string.IsNullOrEmpty(fileName))
@@ -122,7 +122,7 @@ namespace FileConverter.Services
             try
             {
                 if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && 
-                    uri.Host.Contains("localhost"))
+                    (uri.Host.Contains("localhost") || uri.Host == "94.241.171.236"))
                 {
                     string fileName = Path.GetFileName(uri.LocalPath);
                     if (string.IsNullOrEmpty(fileName))
@@ -202,7 +202,7 @@ namespace FileConverter.Services
             try
             {
                 if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && 
-                    uri.Host.Contains("localhost"))
+                    (uri.Host.Contains("localhost") || uri.Host == "94.241.171.236"))
                 {
                     string fileName = Path.GetFileName(uri.LocalPath);
                     string filePath = Path.Combine(_storagePath, fileName);
