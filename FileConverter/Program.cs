@@ -12,6 +12,10 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Http;  // Для HttpClient
 using Microsoft.AspNetCore.Hosting; // Для UseUrls
 using Serilog;
+using System.Text;
+
+// Регистрируем кодировку Windows-1251
+Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 
 var builder = WebApplication.CreateBuilder(args);
 
