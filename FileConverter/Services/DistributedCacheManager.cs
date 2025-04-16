@@ -55,12 +55,12 @@ namespace FileConverter.Services
                 if (string.IsNullOrEmpty(cachedValue))
                     return (false, string.Empty);
                 
-                _logger.LogInformation($"Найден кэшированный результат для: {videoUrl}");
+                _logger.LogInformation($"Found cached result for: {videoUrl}");
                 return (true, cachedValue);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Ошибка при получении данных из кэша для {videoUrl}");
+                _logger.LogWarning(ex, $"Error getting data from cache for {videoUrl}");
                 return (false, string.Empty);
             }
         }
@@ -95,11 +95,11 @@ namespace FileConverter.Services
                 }
                 
                 await _cache.SetStringAsync(cacheKey, mp3Url, options);
-                _logger.LogInformation($"Кэширован результат конвертации для: {videoUrl}");
+                _logger.LogInformation($"Cached conversion result for: {videoUrl}");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Ошибка при кэшировании результата для {videoUrl}");
+                _logger.LogWarning(ex, $"Error caching result for {videoUrl}");
             }
         }
         
@@ -120,11 +120,11 @@ namespace FileConverter.Services
             {
                 var cacheKey = GenerateCacheKey(videoUrl);
                 await _cache.RemoveAsync(cacheKey);
-                _logger.LogInformation($"Удален из кэша результат для: {videoUrl}");
+                _logger.LogInformation($"Removed cached result for: {videoUrl}");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Ошибка при удалении из кэша результата для {videoUrl}");
+                _logger.LogWarning(ex, $"Error removing cached result for {videoUrl}");
             }
         }
         
@@ -141,11 +141,11 @@ namespace FileConverter.Services
                 
                 string jsonData = JsonSerializer.Serialize(value);
                 await _cache.SetStringAsync(key, jsonData, options);
-                _logger.LogDebug($"Данные кэшированы с ключом: {key}");
+                _logger.LogDebug($"Data cached with key: {key}");
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Ошибка при кэшировании данных с ключом {key}");
+                _logger.LogWarning(ex, $"Error caching data with key {key}");
             }
         }
         
@@ -165,7 +165,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Ошибка при получении данных из кэша с ключом {key}");
+                _logger.LogWarning(ex, $"Error getting data from cache with key {key}");
                 return default;
             }
         }

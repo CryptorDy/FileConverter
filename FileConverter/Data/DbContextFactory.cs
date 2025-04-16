@@ -37,7 +37,7 @@ namespace FileConverter.Data
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при выполнении действия с контекстом базы данных");
+                _logger.LogError(ex, "Error executing action with DbContext");
                 throw;
             }
         }
@@ -54,7 +54,7 @@ namespace FileConverter.Data
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при выполнении функции с контекстом базы данных");
+                _logger.LogError(ex, "Error executing function with DbContext");
                 throw;
             }
         }
@@ -71,7 +71,7 @@ namespace FileConverter.Data
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при асинхронном выполнении действия с контекстом базы данных");
+                _logger.LogError(ex, "Error executing async action with DbContext");
                 throw;
             }
         }
@@ -104,7 +104,7 @@ namespace FileConverter.Data
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при асинхронном выполнении функции с контекстом базы данных");
+                _logger.LogError(ex, "Error executing async function with DbContext");
                 throw;
             }
         }

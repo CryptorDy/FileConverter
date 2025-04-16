@@ -98,7 +98,7 @@ namespace FileConverter.Middleware
             
             _logger.LogError(
                 exception,
-                "Необработанное исключение: {ExceptionType} при обработке {Method} {Url} - Body: {RequestBody}",
+                "Unhandled exception: {ExceptionType} when processing {Method} {Url} - Body: {RequestBody}",
                 exception.GetType().Name,
                 request.Method,
                 request.Path.Value,
@@ -108,7 +108,7 @@ namespace FileConverter.Middleware
             if (exception is OutOfMemoryException || exception is StackOverflowException)
             {
                 _logger.LogCritical(
-                    "КРИТИЧЕСКАЯ ОШИБКА: {ExceptionType}. Требуется немедленное вмешательство!",
+                    "CRITICAL ERROR: {ExceptionType}. Immediate attention required!",
                     exception.GetType().Name);
             }
         }

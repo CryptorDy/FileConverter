@@ -34,7 +34,7 @@ namespace FileConverter.Services
                 // Проверяем кэш
                 if (_cacheManager.TryGetMp3Url(videoUrl, out string cachedMp3Url))
                 {
-                    _logger.LogInformation($"Найден кэшированный результат для {videoUrl}: {cachedMp3Url}");
+                    _logger.LogInformation($"Found cached result for {videoUrl}: {cachedMp3Url}");
                     
                     // Создаем задачу, но сразу помечаем как завершенную
                     var job = new ConversionJob 
@@ -68,7 +68,7 @@ namespace FileConverter.Services
                 // Запускаем задачу конвертации асинхронно через Hangfire
                 _backgroundJobClient.Enqueue<IVideoProcessor>(p => p.ProcessVideo(newJob.Id));
 
-                _logger.LogInformation($"Задача конвертации создана: {newJob.Id} для {videoUrl}");
+                _logger.LogInformation($"Conversion task created: {newJob.Id} for {videoUrl}");
                 
                 string apiBaseUrl = _configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
                 
@@ -80,7 +80,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка создания задачи для {videoUrl}");
+                _logger.LogError(ex, $"Error creating task for {videoUrl}");
                 throw;
             }
         }
@@ -112,7 +112,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка создания пакетной задачи");
+                _logger.LogError(ex, "Error creating batch task");
                 throw;
             }
         }
@@ -131,7 +131,7 @@ namespace FileConverter.Services
                 });
             }
 
-            throw new KeyNotFoundException($"Задача с ID {jobId} не найдена");
+            throw new KeyNotFoundException($"Task with ID {jobId} not found");
         }
 
         public async Task<List<JobStatusResponse>> GetBatchStatus(string batchId)
@@ -147,16 +147,22 @@ namespace FileConverter.Services
                         var status = await GetJobStatus(jobId);
                         statuses.Add(status);
                     }
-                    catch
+                    catch (KeyNotFoundException knfEx)
                     {
-                        // Игнорируем ошибки для отдельных задач в пакете
+                        _logger.LogWarning(knfEx, $"Task {jobId} from batch {batchId} not found.", jobId, batchId);
+                        // Add a placeholder status or skip
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, $"Error getting status for job {jobId} in batch {batchId}", jobId, batchId);
+                        // Optionally add an error status
                     }
                 }
                 
                 return statuses;
             }
 
-            throw new KeyNotFoundException($"Пакет задач с ID {batchId} не найден");
+            throw new KeyNotFoundException($"Batch task with ID {batchId} not found");
         }
 
         public Task<List<JobStatusResponse>> GetAllJobs(int skip = 0, int take = 20)

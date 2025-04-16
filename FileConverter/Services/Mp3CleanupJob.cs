@@ -50,15 +50,15 @@ namespace FileConverter.Services
         /// </summary>
         public async Task CleanupExpiredMp3Files()
         {
-            _logger.LogInformation("Запуск очистки MP3 файлов старше 1 часа");
+            _logger.LogInformation("Starting cleanup of MP3 files older than 1 hour");
             
             try
             {
-                // Получаем завершенные задания с MP3 URL, созданные более часа назад
+                // Get completed jobs with MP3 URL created more than an hour ago
                 DateTime expirationThreshold = DateTime.UtcNow.AddHours(-1);
                 var expiredJobs = await _jobRepository.GetCompletedJobsWithMp3UrlOlderThanAsync(expirationThreshold);
                 
-                _logger.LogInformation($"Найдено {expiredJobs.Count()} устаревших MP3 файлов для удаления");
+                _logger.LogInformation($"Found {expiredJobs.Count()} expired MP3 files to delete");
 
                 int deletedCount = 0;
                 int errorCount = 0;
@@ -72,9 +72,9 @@ namespace FileConverter.Services
                             continue;
                         }
 
-                        _logger.LogDebug($"Удаление MP3 файла: {job.Mp3Url} (создан: {job.CompletedAt})");
+                        _logger.LogDebug($"Deleting MP3 file: {job.Mp3Url} (created: {job.CompletedAt})");
                         
-                        // Удаляем файл
+                        // Delete the file
                         bool deleted = await _storageService.DeleteFileAsync(job.Mp3Url);
                         
                         if (deleted)
@@ -83,28 +83,28 @@ namespace FileConverter.Services
                         }
                         else
                         {
-                            _logger.LogWarning($"Не удалось удалить MP3 файл: {job.Mp3Url}");
+                            _logger.LogWarning($"Failed to delete MP3 file: {job.Mp3Url}");
                             errorCount++;
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, $"Ошибка при удалении MP3 файла: {job.Mp3Url}");
+                        _logger.LogError(ex, $"Error deleting MP3 file: {job.Mp3Url}");
                         errorCount++;
                     }
                 }
                 
-                _logger.LogInformation($"Очистка MP3 файлов завершена. Удалено: {deletedCount}, ошибок: {errorCount}");
+                _logger.LogInformation($"MP3 file cleanup finished. Deleted: {deletedCount}, errors: {errorCount}");
             }
             catch (Exception ex) when (ex.Message.Contains("relation") && ex.Message.Contains("does not exist"))
             {
-                // Обработка ошибки, когда таблица не существует (еще не создана через миграцию)
-                _logger.LogWarning("Таблица ConversionJobs еще не создана, пропускаем очистку MP3: {ErrorMessage}", ex.Message);
+                // Handle error when the table does not exist (not yet created via migration)
+                _logger.LogWarning("ConversionJobs table not created yet, skipping MP3 cleanup: {ErrorMessage}", ex.Message);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Непредвиденная ошибка при очистке MP3 файлов");
-                throw; // Позволяем Hangfire повторить задачу
+                _logger.LogError(ex, "Unexpected error during MP3 file cleanup");
+                throw; // Allow Hangfire to retry the job
             }
         }
     }

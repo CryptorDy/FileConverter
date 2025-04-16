@@ -34,7 +34,7 @@ namespace FileConverter.Services
             if (_cache.TryGetValue(cacheKey, out string? cachedMp3Url) && !string.IsNullOrEmpty(cachedMp3Url))
             {
                 mp3Url = cachedMp3Url;
-                _logger.LogInformation($"Найден кэшированный результат для: {videoUrl}");
+                _logger.LogInformation($"Found cached result for: {videoUrl}");
                 return true;
             }
             
@@ -54,7 +54,7 @@ namespace FileConverter.Services
                 .SetAbsoluteExpiration(expiration ?? TimeSpan.FromDays(7));
                 
             _cache.Set(cacheKey, mp3Url, options);
-            _logger.LogInformation($"Кэширован результат конвертации для: {videoUrl}");
+            _logger.LogInformation($"Cached conversion result for: {videoUrl}");
         }
         
         /// <summary>
@@ -64,7 +64,7 @@ namespace FileConverter.Services
         {
             var cacheKey = GenerateCacheKey(videoUrl);
             _cache.Remove(cacheKey);
-            _logger.LogInformation($"Удален из кэша результат для: {videoUrl}");
+            _logger.LogInformation($"Removed cached result for: {videoUrl}");
         }
     }
 } 

@@ -43,7 +43,7 @@ namespace FileConverter.Services
                 TimeSpan.FromSeconds(reportingIntervalSec), 
                 TimeSpan.FromSeconds(reportingIntervalSec));
                 
-            _logger.LogInformation("Инициализирован сборщик метрик с интервалом отчетности {Interval} секунд", reportingIntervalSec);
+            _logger.LogInformation("Initialized metrics collector with reporting interval {Interval} seconds", reportingIntervalSec);
         }
         
         /// <summary>
@@ -110,7 +110,7 @@ namespace FileConverter.Services
             if (durationMs > 5000) // более 5 секунд
             {
                 _logger.LogWarning(
-                    "Длительная операция: {Operation}, Время: {Duration} мс, Контекст: {Context}",
+                    "Long operation: {Operation}, Time: {Duration} ms, Context: {Context}",
                     operation, durationMs, context ?? "N/A");
             }
         }
@@ -130,7 +130,7 @@ namespace FileConverter.Services
             if (cpuUsagePercent > 80 || memoryUsageMb > 1024 * 8) // 80% CPU или 8 GB RAM
             {
                 _logger.LogWarning(
-                    "Высокое использование ресурсов: CPU {CpuUsage}%, Память: {MemoryUsage} МБ",
+                    "High resource usage: CPU {CpuUsage}%, Memory: {MemoryUsage} MB",
                     cpuUsagePercent, memoryUsageMb);
             }
         }
@@ -247,8 +247,8 @@ namespace FileConverter.Services
                 
                 // Логируем сводку
                 _logger.LogInformation(
-                    "Метрики производительности: Запросы {TotalRequests} (Успех: {SuccessRate:F1}%), " +
-                    "Конвертации {TotalConversions} (Успех: {ConversionSuccessRate:F1}%, Из кэша: {CachedResults})",
+                    "Performance metrics: Requests {TotalRequests} (Success: {SuccessRate:F1}%), " +
+                    "Conversions {TotalConversions} (Success: {ConversionSuccessRate:F1}%, Cached: {CachedResults})",
                     summary.Requests.Total,
                     summary.Requests.SuccessRate,
                     summary.Conversions.Total,
@@ -262,15 +262,15 @@ namespace FileConverter.Services
                 if (summary.Requests.SuccessRate < 95 || summary.Conversions.SuccessRate < 90)
                 {
                     _logger.LogWarning(
-                        "Обнаружены проблемы с производительностью! " +
-                        "Успешные запросы: {RequestSuccessRate:F1}%, Успешные конвертации: {ConversionSuccessRate:F1}%",
+                        "Performance issues detected! " +
+                        "Successful requests: {RequestSuccessRate:F1}%, Successful conversions: {ConversionSuccessRate:F1}%",
                         summary.Requests.SuccessRate,
                         summary.Conversions.SuccessRate);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при формировании отчета о метриках");
+                _logger.LogError(ex, "Error generating metrics report");
             }
         }
     }

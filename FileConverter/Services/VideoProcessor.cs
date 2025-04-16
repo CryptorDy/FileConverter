@@ -87,7 +87,7 @@ namespace FileConverter.Services
                             TaskCreationOptions.LongRunning);
                     }
                     
-                    _logger.LogInformation($"Запущено {downloadWorkers} обработчиков загрузки видео");
+                    _logger.LogInformation($"Started {downloadWorkers} video download workers");
                 }
                 
                 // Запуск обработчиков конвертации
@@ -102,7 +102,7 @@ namespace FileConverter.Services
                             TaskCreationOptions.LongRunning);
                     }
                     
-                    _logger.LogInformation($"Запущено {conversionWorkers} обработчиков конвертации видео");
+                    _logger.LogInformation($"Started {conversionWorkers} video conversion workers");
                 }
                 
                 // Запуск обработчиков загрузки MP3
@@ -117,7 +117,7 @@ namespace FileConverter.Services
                             TaskCreationOptions.LongRunning);
                     }
                     
-                    _logger.LogInformation($"Запущено {uploadWorkers} обработчиков загрузки MP3");
+                    _logger.LogInformation($"Started {uploadWorkers} MP3 upload workers");
                 }
             }
         }
@@ -131,14 +131,14 @@ namespace FileConverter.Services
                 var job = await _repository.GetJobByIdAsync(jobId);
                 if (job == null)
                 {
-                    _logger.LogError($"Задача {jobId} не найдена");
+                    _logger.LogError($"Task {jobId} not found");
                     return;
                 }
                 
                 // Проверяем кэш
                 if (_cacheManager.TryGetMp3Url(job.VideoUrl, out string cachedMp3Url))
                 {
-                    _logger.LogInformation($"Найден кэшированный результат для задачи {jobId}: {cachedMp3Url}");
+                    _logger.LogInformation($"Found cached result for task {jobId}: {cachedMp3Url}");
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Completed, mp3Url: cachedMp3Url);
                     return;
                 }
@@ -146,31 +146,31 @@ namespace FileConverter.Services
                 // Проверяем безопасность URL
                 if (!_urlValidator.IsUrlValid(job.VideoUrl))
                 {
-                    _logger.LogWarning($"Обнаружен небезопасный URL для задачи {jobId}: {job.VideoUrl}");
+                    _logger.LogWarning($"Detected unsafe URL for task {jobId}: {job.VideoUrl}");
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                        errorMessage: "Обнаружен некорректный или небезопасный URL");
+                        errorMessage: "Detected invalid or unsafe URL");
                     return;
                 }
                 
                 // Проверяем размер файла
                 if (!await _urlValidator.IsFileSizeValid(job.VideoUrl))
                 {
-                    _logger.LogWarning($"Файл превышает допустимый размер для задачи {jobId}: {job.VideoUrl}");
+                    _logger.LogWarning($"File exceeds allowed size for task {jobId}: {job.VideoUrl}");
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                        errorMessage: "Файл превышает максимально допустимый размер");
+                        errorMessage: "File exceeds maximum allowed size");
                     return;
                 }
                 
                 // Помещаем видео в очередь загрузки
                 await _downloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
-                _logger.LogInformation($"Задача {jobId} поставлена в очередь на загрузку");
+                _logger.LogInformation($"Task {jobId} queued for download");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка постановки задачи {jobId} в очередь");
+                _logger.LogError(ex, $"Error queuing task {jobId}");
                 // Обновляем статус задачи в случае ошибки
                 await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                    errorMessage: $"Ошибка постановки в очередь: {ex.Message}");
+                    errorMessage: $"Error queuing task: {ex.Message}");
             }
         }
         
@@ -190,7 +190,7 @@ namespace FileConverter.Services
                     jobId = item.JobId;
                     videoUrl = item.VideoUrl;
                     
-                    _logger.LogInformation($"Начало загрузки видео для задачи {jobId}: {videoUrl}");
+                    _logger.LogInformation($"Starting video download for task {jobId}: {videoUrl}");
                     
                     try
                     {
@@ -199,15 +199,15 @@ namespace FileConverter.Services
                     }
                     catch (Exception statusEx)
                     {
-                        _logger.LogError(statusEx, "Ошибка при обновлении статуса задачи {JobId} на Downloading. Продолжаем обработку.", jobId);
+                        _logger.LogError(statusEx, "Error updating task status {JobId} to Downloading. Continuing processing.", jobId);
                     }
                     
                     // Проверяем тип контента
                     var contentTypeResult = await _urlValidator.IsContentTypeValid(videoUrl);
                     if (!contentTypeResult.isValid)
                     {
-                        _logger.LogWarning($"Недопустимый тип контента для {videoUrl}: {contentTypeResult.contentType}");
-                        throw new InvalidOperationException($"Недопустимый тип контента: {contentTypeResult.contentType}");
+                        _logger.LogWarning($"Invalid content type for {videoUrl}: {contentTypeResult.contentType}");
+                        throw new InvalidOperationException($"Invalid content type: {contentTypeResult.contentType}");
                     }
                     
                     // Получаем расширение файла
@@ -231,7 +231,7 @@ namespace FileConverter.Services
                         if (await _storageService.FileExistsAsync(videoUrl))
                         {
                             fileData = await _storageService.DownloadFileAsync(videoUrl);
-                            _logger.LogInformation($"Видео загружено из хранилища: {videoUrl}");
+                            _logger.LogInformation($"Video downloaded from storage: {videoUrl}");
                         }
                         else
                         {
@@ -244,29 +244,29 @@ namespace FileConverter.Services
                                 if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                                 {
                                     // Для Instagram и других социальных сетей, которые блокируют прямой доступ
-                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямую загрузку: {videoUrl}");
+                                    throw new InvalidOperationException($"Access denied (403 Forbidden). URL may require authorization or does not support direct download: {videoUrl}");
                                 }
                                 else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                                 {
-                                    throw new InvalidOperationException($"Файл не найден (404 Not Found): {videoUrl}");
+                                    throw new InvalidOperationException($"File not found (404 Not Found): {videoUrl}");
                                 }
                                 else if (!response.IsSuccessStatusCode)
                                 {
-                                    throw new InvalidOperationException($"Ошибка HTTP при загрузке: {(int)response.StatusCode} {response.ReasonPhrase}");
+                                    throw new InvalidOperationException($"HTTP error during download: {(int)response.StatusCode} {response.ReasonPhrase}");
                                 }
                                 
                                 fileData = await response.Content.ReadAsByteArrayAsync();
-                                _logger.LogInformation($"Видео загружено по URL: {videoUrl}");
+                                _logger.LogInformation($"Video downloaded from URL: {videoUrl}");
                             }
                             catch (HttpRequestException httpEx)
                             {
                                 if (httpEx.Message.Contains("403"))
                                 {
-                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL требует авторизации: {videoUrl}", httpEx);
+                                    throw new InvalidOperationException($"Access denied (403 Forbidden). URL requires authorization: {videoUrl}", httpEx);
                                 }
                                 else
                                 {
-                                    throw new InvalidOperationException($"Ошибка HTTP при загрузке: {httpEx.Message}", httpEx);
+                                    throw new InvalidOperationException($"HTTP error during download: {httpEx.Message}", httpEx);
                                 }
                             }
                         }
@@ -287,26 +287,26 @@ namespace FileConverter.Services
                         }
                         catch (Exception updateEx)
                         {
-                            _logger.LogError(updateEx, "Ошибка при обновлении информации о файле для задачи {JobId}. Продолжаем обработку.", jobId);
+                            _logger.LogError(updateEx, "Error updating file info for task {JobId}. Continuing processing.", jobId);
                         }
                     }
                     
                     // Помещаем видео в очередь конвертации
                     await _conversionChannel.Writer.WriteAsync((jobId, videoPath));
-                    _logger.LogInformation($"Задача {jobId} поставлена в очередь на конвертацию");
+                    _logger.LogInformation($"Task {jobId} queued for conversion");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Ошибка загрузки видео для задачи {jobId}: {videoUrl}");
+                    _logger.LogError(ex, $"Error downloading video for task {jobId}: {videoUrl}");
                     
                     try
                     {
                         await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                            errorMessage: $"Ошибка загрузки видео: {ex.Message}");
+                            errorMessage: $"Error downloading video: {ex.Message}");
                     }
                     catch (Exception updateEx)
                     {
-                        _logger.LogError(updateEx, "Не удалось обновить статус задачи {JobId} на Failed после ошибки загрузки", jobId);
+                        _logger.LogError(updateEx, "Failed to update task status {JobId} to Failed after download error", jobId);
                     }
                     
                     // Очищаем временные файлы в случае ошибки
@@ -315,12 +315,12 @@ namespace FileConverter.Services
                         if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
                         {
                             File.Delete(videoPath);
-                            _logger.LogInformation($"Удален временный файл после ошибки: {videoPath}");
+                            _logger.LogInformation($"Deleted temporary file after error: {videoPath}");
                         }
                     }
                     catch (Exception cleanupEx)
                     {
-                        _logger.LogError(cleanupEx, "Ошибка при удалении временного файла: {Path}", videoPath);
+                        _logger.LogError(cleanupEx, "Error deleting temporary file: {Path}", videoPath);
                     }
                 }
             }
@@ -342,7 +342,7 @@ namespace FileConverter.Services
                     jobId = item.JobId;
                     videoPath = item.VideoPath;
                     
-                    _logger.LogInformation($"Начало конвертации видео для задачи {jobId}: {videoPath}");
+                    _logger.LogInformation($"Starting video conversion for task {jobId}: {videoPath}");
                     
                     // Обновляем статус
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Converting);
@@ -372,18 +372,18 @@ namespace FileConverter.Services
                     
                     if (!File.Exists(mp3Path))
                     {
-                        throw new InvalidOperationException($"Не удалось создать MP3 файл: {mp3Path}");
+                        throw new InvalidOperationException($"Failed to create MP3 file: {mp3Path}");
                     }
                     
                     // Помещаем MP3 в очередь загрузки
                     await _uploadChannel.Writer.WriteAsync((jobId, mp3Path));
-                    _logger.LogInformation($"Задача {jobId} поставлена в очередь на сохранение MP3");
+                    _logger.LogInformation($"Task {jobId} queued for MP3 upload");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Ошибка конвертации видео для задачи {jobId}: {videoPath}");
+                    _logger.LogError(ex, $"Error converting video for task {jobId}: {videoPath}");
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                        errorMessage: $"Ошибка конвертации видео: {ex.Message}");
+                        errorMessage: $"Error converting video: {ex.Message}");
                     
                     // Очищаем временные файлы
                     _tempFileManager.DeleteTempFile(videoPath);
@@ -408,7 +408,7 @@ namespace FileConverter.Services
                     jobId = item.JobId;
                     mp3Path = item.Mp3Path;
                     
-                    _logger.LogInformation($"Начало загрузки MP3 в хранилище для задачи {jobId}: {mp3Path}");
+                    _logger.LogInformation($"Starting MP3 upload to storage for task {jobId}: {mp3Path}");
                     
                     // Обновляем статус
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Uploading);
@@ -426,13 +426,13 @@ namespace FileConverter.Services
                     // Обновляем статус задачи
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Completed, mp3Url: mp3Url);
                     
-                    _logger.LogInformation($"Задача {jobId} успешно завершена: {mp3Url}");
+                    _logger.LogInformation($"Task {jobId} completed successfully: {mp3Url}");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Ошибка загрузки MP3 для задачи {jobId}: {mp3Path}");
+                    _logger.LogError(ex, $"Error uploading MP3 for task {jobId}: {mp3Path}");
                     await DbJobManager.UpdateJobStatusAsync(_repository, _cacheManager, jobId, ConversionStatus.Failed, 
-                        errorMessage: $"Ошибка загрузки MP3: {ex.Message}");
+                        errorMessage: $"Error uploading MP3: {ex.Message}");
                 }
                 finally
                 {

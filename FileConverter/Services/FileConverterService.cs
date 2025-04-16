@@ -1,5 +1,6 @@
- using Xabe.FFmpeg;
+using Xabe.FFmpeg;
 using Microsoft.Extensions.Configuration;
+using System.Diagnostics;
 
 namespace FileConverter.Services
 {
@@ -23,7 +24,7 @@ namespace FileConverter.Services
             
             // Получаем путь к ffmpeg из конфигурации, с запасным вариантом
             string ffmpegPath = _configuration["AppSettings:FFmpegPath"] ?? "/usr/bin";
-            _logger.LogInformation("Используется путь к FFmpeg для Linux: {Path}", ffmpegPath);
+            _logger.LogInformation("Using FFmpeg path for Linux: {Path}", ffmpegPath);
             
             // На Linux используются исполняемые файлы без расширения .exe
             FFmpeg.SetExecutablesPath(ffmpegPath);
@@ -33,93 +34,81 @@ namespace FileConverter.Services
             string ffprobeExe = Path.Combine(ffmpegPath, "ffprobe");
             
             if (!File.Exists(ffmpegExe))
-                _logger.LogWarning("Исполняемый файл ffmpeg не найден по пути: {Path}", ffmpegExe);
+                _logger.LogWarning("FFmpeg executable not found at path: {Path}", ffmpegExe);
             
             if (!File.Exists(ffprobeExe))
-                _logger.LogWarning("Исполняемый файл ffprobe не найден по пути: {Path}", ffprobeExe);
+                _logger.LogWarning("FFprobe executable not found at path: {Path}", ffprobeExe);
         }
 
         public async Task<List<string>> FromVideoToMP3Async(List<string> sourceUrls)
         {
-            var resultUrls = new List<string>();
-            using var httpClient = new HttpClient();
+            var mp3Urls = new List<string>();
+            var tasks = new List<Task>();
 
             foreach (var sourceUrl in sourceUrls)
             {
-                string tempVideoPath = null;
-                string tempAudioPath = null;
-
-                try
-                {
-                    _logger.LogInformation($"Начало обработки: {sourceUrl}");
-
-                    // 1. Скачивание видео
-                    tempVideoPath = await DownloadSourceFileAsync(sourceUrl, httpClient);
-
-                    // 2. Конвертация в MP3
-                    tempAudioPath = await ConvertToMp3Async(tempVideoPath);
-                    
-                    // 3. Загрузка в хранилище
-                    string s3Url = await _s3StorageService.UploadFileAsync(tempAudioPath, "audio/mpeg");
-
-                    resultUrls.Add(s3Url);
-                    _logger.LogInformation($"Успешная конвертация: {sourceUrl} -> {s3Url}");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, $"Ошибка конвертации {sourceUrl}");
-                    throw;
-                }
-                finally
-                {
-                    CleanupTempFiles(tempVideoPath, tempAudioPath);
-                }
+                tasks.Add(ConvertVideoToMP3Async(sourceUrl, mp3Urls));
             }
 
-            return resultUrls;
+            await Task.WhenAll(tasks);
+            return mp3Urls;
         }
 
-        private async Task<string> DownloadSourceFileAsync(string url, HttpClient httpClient)
+        private async Task ConvertVideoToMP3Async(string sourceUrl, List<string> mp3Urls)
         {
-            // Получаем расширение файла из URL
-            string extension = Path.GetExtension(url);
-            
-            // Очищаем расширение от параметров URL
-            if (!string.IsNullOrEmpty(extension))
+            string videoPath = string.Empty;
+            string mp3Path = string.Empty;
+            var sw = Stopwatch.StartNew();
+
+            try
             {
-                // Обрезаем всё после первого вхождения '?' или '#'
-                int queryIndex = extension.IndexOfAny(new[] { '?', '#' });
-                if (queryIndex > 0)
+                _logger.LogInformation($"Starting file conversion: {sourceUrl}");
+
+                videoPath = await DownloadVideoAsync(sourceUrl);
+                mp3Path = await ConvertToMP3Async(videoPath);
+
+                var contentType = "audio/mpeg";
+                var mp3Url = await _s3StorageService.UploadFileAsync(mp3Path, contentType);
+
+                lock (mp3Urls)
                 {
-                    extension = extension.Substring(0, queryIndex);
+                    mp3Urls.Add(mp3Url);
                 }
+                
+                sw.Stop();
+                _logger.LogInformation($"Conversion completed successfully: {sourceUrl} -> {mp3Url}, Time: {sw.ElapsedMilliseconds} ms");
             }
-
-            // Если расширение отсутствует или некорректное, используем .mp4 по умолчанию
-            if (string.IsNullOrEmpty(extension) || extension.Length <= 1)
+            catch (Exception ex)
             {
-                extension = ".mp4"; // Стандартное расширение по умолчанию
+                sw.Stop();
+                _logger.LogError(ex, $"Error converting file: {sourceUrl}, Time: {sw.ElapsedMilliseconds} ms");
+                // В зависимости от политики можно добавлять null или URL с ошибкой
+                // lock (mp3Urls) { mp3Urls.Add(null); } 
             }
-
-            var tempPath = Path.Combine(_tempPath, $"{Guid.NewGuid()}{extension}");
-            byte[] fileData;
-
-            if (await _s3StorageService.FileExistsAsync(url))
+            finally
             {
-                fileData = await _s3StorageService.DownloadFileAsync(url);
-                _logger.LogInformation($"Видео скачано из S3: {url}");
+                CleanupTempFiles(videoPath, mp3Path);
             }
-            else
-            {
-                fileData = await httpClient.GetByteArrayAsync(url);
-                _logger.LogInformation($"Видео загружено по ссылке: {url}");
-            }
-
-            await File.WriteAllBytesAsync(tempPath, fileData);
-            return tempPath;
         }
 
-        private async Task<string> ConvertToMp3Async(string videoPath)
+        private async Task<string> DownloadVideoAsync(string url)
+        {
+            var videoData = await _s3StorageService.DownloadFileAsync(url);
+            var extension = Path.GetExtension(url);
+            if (string.IsNullOrEmpty(extension))
+            {
+                // Пытаемся определить расширение по URL или стандартно .tmp
+                extension = new Uri(url).Segments.LastOrDefault()?.Contains(".") == true 
+                    ? Path.GetExtension(new Uri(url).Segments.Last()) 
+                    : ".tmp";
+            }
+            
+            var videoPath = Path.Combine(_tempPath, $"{Guid.NewGuid()}{extension}");
+            await File.WriteAllBytesAsync(videoPath, videoData);
+            return videoPath;
+        }
+
+        private async Task<string> ConvertToMP3Async(string videoPath)
         {
             var outputPath = Path.Combine(_tempPath, $"{Guid.NewGuid()}.mp3");
             var mediaInfo = await FFmpeg.GetMediaInfo(videoPath);
@@ -132,7 +121,7 @@ namespace FileConverter.Services
                 .Start();
 
             if (!File.Exists(outputPath))
-                throw new InvalidOperationException($"Конвертация не удалась: {videoPath}");
+                throw new InvalidOperationException($"Conversion failed: {videoPath}");
 
             return outputPath;
         }
@@ -146,11 +135,11 @@ namespace FileConverter.Services
                 try
                 {
                     File.Delete(path);
-                    _logger.LogInformation($"Временный файл удалён: {path}");
+                    _logger.LogInformation($"Temporary file deleted: {path}");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, $"Ошибка удаления файла: {path}");
+                    _logger.LogWarning(ex, $"Error deleting file: {path}");
                 }
             }
         }

@@ -16,6 +16,7 @@ using System.Text;
 
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+var encoding = Encoding.GetEncoding(1251);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,17 +28,21 @@ Log.Logger = new LoggerConfiguration()
     .Enrich.WithProperty("ApplicationName", "FileConverter")
     .Enrich.FromLogContext()
     .Enrich.WithThreadId()
-    .WriteTo.Console()
+    .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(
         $"Logs/FileConverter-All-.log",
         Serilog.Events.LogEventLevel.Information,
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] {Level:u3} {Message:lj}{NewLine}{Exception}",
         rollingInterval: Serilog.RollingInterval.Day,
-        retainedFileCountLimit: 30)
+        retainedFileCountLimit: 30,
+        encoding: encoding)
     .WriteTo.File(
         $"Logs/FileConverter-Errors-.log",
         Serilog.Events.LogEventLevel.Error,
+        outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] {Level:u3} {Message:lj}{NewLine}{Exception}",
         rollingInterval: Serilog.RollingInterval.Day,
-        retainedFileCountLimit: 30)
+        retainedFileCountLimit: 30,
+        encoding: encoding)
     .CreateLogger();
 
 builder.Host.UseSerilog();
@@ -178,7 +183,7 @@ builder.Services.AddRateLimiter(options =>
         context.HttpContext.Response.ContentType = "application/json";
         
         await context.HttpContext.Response.WriteAsync(
-            """{"error":"Слишком много запросов. Пожалуйста, повторите попытку позже."}""", 
+            """{"error":"Too many requests. Please try again later."}""", 
             cancellationToken: token);
     };
 });
@@ -269,13 +274,13 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        app.Logger.LogInformation("Запуск миграции базы данных...");
+        app.Logger.LogInformation("Starting database migration...");
         dbContext.Database.Migrate();
-        app.Logger.LogInformation("Миграция базы данных успешно завершена");
+        app.Logger.LogInformation("Database migration completed successfully");
     }
     catch (Exception ex)
     {
-        app.Logger.LogError(ex, "Ошибка при миграции базы данных");
+        app.Logger.LogError(ex, "Error during database migration");
         // В случае критических ошибок можно прервать запуск приложения
         // throw;
     }
@@ -299,7 +304,7 @@ if (app.Environment.IsDevelopment())
     // Добавляем панель управления Hangfire только в режиме разработки
     app.UseHangfireDashboard("/hangfire", new DashboardOptions
     {
-        DashboardTitle = "Панель управления конвертацией видео",
+        DashboardTitle = "Video Conversion Dashboard",
         DisplayStorageConnectionString = false,
         IsReadOnlyFunc = (context) => false
     });
@@ -342,7 +347,7 @@ TempFileCleanupJob.ScheduleJobs();
 Mp3CleanupJob.ScheduleJobs(); // Запускаем очистку MP3
 
 // Логируем запуск приложения
-Log.Information("Приложение FileConverter запущено в среде {Environment}", 
+Log.Information("FileConverter application started in {Environment} environment", 
     app.Environment.EnvironmentName);
 
 try
@@ -351,11 +356,11 @@ try
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "Приложение FileConverter аварийно завершило работу");
+    Log.Fatal(ex, "FileConverter application terminated unexpectedly");
 }
 finally
 {
-    Log.Information("Приложение FileConverter завершило работу");
+    Log.Information("FileConverter application shutdown complete");
     Log.CloseAndFlush();
 }
 
@@ -379,7 +384,7 @@ public static class ServiceActivator
     {
         if (_serviceProvider == null)
         {
-            throw new InvalidOperationException("ServiceActivator не инициализирован. Сначала вызовите Configure.");
+            throw new InvalidOperationException("ServiceActivator not initialized. Call Configure first.");
         }
         return _serviceProvider.CreateScope();
     }

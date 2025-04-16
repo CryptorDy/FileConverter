@@ -106,8 +106,8 @@ namespace FileConverter.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при получении метрик производительности");
-                return StatusCode(500, "Ошибка при получении метрик производительности");
+                _logger.LogError(ex, "Error getting metrics");
+                return StatusCode(500, "Error retrieving metrics");
             }
         }
 
@@ -195,8 +195,8 @@ namespace FileConverter.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при очистке временных файлов");
-                return StatusCode(500, "Ошибка при очистке временных файлов");
+                _logger.LogError(ex, "Error cleaning up temporary files");
+                return StatusCode(500, "Error cleaning up temporary files");
             }
         }
     }

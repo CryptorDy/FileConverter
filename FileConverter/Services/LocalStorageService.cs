@@ -9,6 +9,8 @@ namespace FileConverter.Services
         private readonly string _storagePath;
         private readonly string _baseUrl;
         private readonly FileExtensionContentTypeProvider _contentTypeProvider;
+        private readonly IWebHostEnvironment _webHostEnvironment;
+        private readonly IConfiguration _configuration;
 
         public LocalStorageService(
             ILogger<LocalStorageService> logger, 
@@ -16,36 +18,36 @@ namespace FileConverter.Services
             IWebHostEnvironment environment)
         {
             _logger = logger;
-            
-            // Обеспечиваем наличие пути хранения в любом случае
+            _webHostEnvironment = environment;
+            _configuration = configuration;
+
+            // Определяем базовый путь для хранения файлов
             string storageBasePath;
-            
             try
             {
-                // Порядок проверки путей от наиболее предпочтительного к запасным
-                if (!string.IsNullOrEmpty(environment.WebRootPath))
+                if (!string.IsNullOrEmpty(_webHostEnvironment.WebRootPath) && Directory.Exists(_webHostEnvironment.WebRootPath))
                 {
-                    storageBasePath = environment.WebRootPath;
-                    _logger.LogInformation("Используем WebRootPath: {Path}", storageBasePath);
+                    storageBasePath = _webHostEnvironment.WebRootPath;
+                    _logger.LogInformation("Using WebRootPath for storage: {Path}", storageBasePath);
                 }
-                else if (!string.IsNullOrEmpty(environment.ContentRootPath))
+                else if (!string.IsNullOrEmpty(_webHostEnvironment.ContentRootPath))
                 {
-                    storageBasePath = Path.Combine(environment.ContentRootPath, "wwwroot");
-                    _logger.LogInformation("WebRootPath пуст, используем ContentRootPath + wwwroot: {Path}", storageBasePath);
+                    storageBasePath = Path.Combine(_webHostEnvironment.ContentRootPath, "wwwroot");
+                    _logger.LogInformation("WebRootPath is empty or invalid, using ContentRootPath + wwwroot: {Path}", storageBasePath);
                 }
                 else
                 {
                     // Абсолютный запасной вариант - используем текущую директорию приложения
                     storageBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "storage");
-                    _logger.LogWarning("WebRootPath и ContentRootPath пусты, используем запасной путь: {Path}", storageBasePath);
+                    _logger.LogWarning("WebRootPath and ContentRootPath are empty, using fallback path: {Path}", storageBasePath);
                 }
             }
             catch (Exception ex)
             {
                 // В случае любых проблем с определением путей используем запасной вариант
-                _logger.LogError(ex, "Ошибка при определении базового пути хранения");
+                _logger.LogError(ex, "Error determining base storage path");
                 storageBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "storage");
-                _logger.LogWarning("Используем запасной путь из-за ошибки: {Path}", storageBasePath);
+                _logger.LogWarning("Using fallback path due to error: {Path}", storageBasePath);
             }
             
             // Создаем базовую директорию, если она не существует
@@ -54,18 +56,18 @@ namespace FileConverter.Services
                 if (!Directory.Exists(storageBasePath))
                 {
                     Directory.CreateDirectory(storageBasePath);
-                    _logger.LogInformation("Создана базовая директория: {Path}", storageBasePath);
+                    _logger.LogInformation("Created base directory: {Path}", storageBasePath);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Не удалось создать базовую директорию: {Path}", storageBasePath);
+                _logger.LogError(ex, "Failed to create base directory: {Path}", storageBasePath);
                 // Не выбрасываем исключение, продолжаем работу
             }
             
             // Устанавливаем путь для хранения MP3
             _storagePath = Path.Combine(storageBasePath, "mp3");
-            _logger.LogInformation("Установлен путь хранения MP3: {Path}", _storagePath);
+            _logger.LogInformation("Set MP3 storage path: {Path}", _storagePath);
             
             _baseUrl = configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
             _contentTypeProvider = new FileExtensionContentTypeProvider();
@@ -76,13 +78,12 @@ namespace FileConverter.Services
                 if (!Directory.Exists(_storagePath))
                 {
                     Directory.CreateDirectory(_storagePath);
-                    _logger.LogInformation("Создана директория для MP3: {Path}", _storagePath);
+                    _logger.LogInformation("Created MP3 directory: {Path}", _storagePath);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Не удалось создать директорию для MP3: {Path}", _storagePath);
-                // Не выбрасываем исключение, продолжаем работу
+                _logger.LogError(ex, "Failed to create MP3 directory: {Path}", _storagePath);
             }
         }
 
@@ -90,29 +91,22 @@ namespace FileConverter.Services
         {
             try
             {
-                // Проверяем, является ли URL локальным файлом
                 if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && 
                     (uri.Host.Contains("localhost") || uri.Host == "94.241.171.236"))
                 {
                     string fileName = Path.GetFileName(uri.LocalPath);
-                    if (string.IsNullOrEmpty(fileName))
-                    {
-                        _logger.LogWarning("Недопустимое имя файла в URL: {Url}", url);
-                        return Task.FromResult(false);
-                    }
-                    
                     string filePath = Path.Combine(_storagePath, fileName);
                     bool exists = File.Exists(filePath);
-                    _logger.LogDebug("Проверка наличия файла: {FilePath}, Результат: {Exists}", filePath, exists);
+                    _logger.LogDebug("Checking file existence: {FilePath} - Exists: {Exists}", filePath, exists);
                     return Task.FromResult(exists);
                 }
                 
-                _logger.LogWarning("URL не является локальным: {Url}", url);
+                _logger.LogWarning("Cannot check file existence for external URL: {Url}", url);
                 return Task.FromResult(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при проверке существования файла: {Url}", url);
+                _logger.LogError(ex, "Error checking file existence: {Url}", url);
                 return Task.FromResult(false);
             }
         }
@@ -127,26 +121,26 @@ namespace FileConverter.Services
                     string fileName = Path.GetFileName(uri.LocalPath);
                     if (string.IsNullOrEmpty(fileName))
                     {
-                        _logger.LogError("Недопустимое имя файла в URL: {Url}", url);
-                        throw new ArgumentException($"Недопустимое имя файла в URL: {url}");
+                        _logger.LogError("Invalid file name in URL: {Url}", url);
+                        throw new ArgumentException($"Invalid file name in URL: {url}");
                     }
                     
                     string filePath = Path.Combine(_storagePath, fileName);
-                    _logger.LogDebug("Загрузка файла: {FilePath}", filePath);
+                    _logger.LogDebug("Downloading file: {FilePath}", filePath);
                     
                     if (File.Exists(filePath))
                     {
                         return Task.FromResult(File.ReadAllBytes(filePath));
                     }
                     
-                    _logger.LogWarning("Файл не найден: {FilePath}", filePath);
+                    _logger.LogWarning("File not found: {FilePath}", filePath);
                 }
                 else
                 {
-                    _logger.LogWarning("URL не является локальным: {Url}", url);
+                    _logger.LogWarning("URL is not local: {Url}", url);
                 }
                 
-                throw new FileNotFoundException($"Файл не найден: {url}");
+                throw new FileNotFoundException($"File not found: {url}");
             }
             catch (FileNotFoundException)
             {
@@ -155,8 +149,8 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при загрузке файла: {Url}", url);
-                throw new IOException($"Ошибка при загрузке файла: {url}", ex);
+                _logger.LogError(ex, "Error downloading file: {Url}", url);
+                throw new IOException($"Error downloading file: {url}", ex);
             }
         }
 
@@ -166,33 +160,33 @@ namespace FileConverter.Services
             {
                 if (string.IsNullOrEmpty(filePath))
                 {
-                    _logger.LogError("Пустой путь к файлу при загрузке");
-                    throw new ArgumentException("Путь к файлу не может быть пустым");
+                    _logger.LogError("Empty file path during upload");
+                    throw new ArgumentException("File path cannot be empty");
                 }
                 
                 if (!File.Exists(filePath))
                 {
-                    _logger.LogError("Файл для загрузки не существует: {FilePath}", filePath);
-                    throw new FileNotFoundException($"Файл не найден: {filePath}");
+                    _logger.LogError("File to upload does not exist: {FilePath}", filePath);
+                    throw new FileNotFoundException($"File not found: {filePath}");
                 }
                 
                 string fileName = Path.GetFileName(filePath);
                 string uniqueFileName = $"{Path.GetFileNameWithoutExtension(fileName)}_{DateTime.Now.Ticks}{Path.GetExtension(fileName)}";
                 string destinationPath = Path.Combine(_storagePath, uniqueFileName);
                 
-                _logger.LogDebug("Копирование файла из {Source} в {Destination}", filePath, destinationPath);
+                _logger.LogDebug("Copying file from {Source} to {Destination}", filePath, destinationPath);
                 File.Copy(filePath, destinationPath, true);
                 
                 // Формируем URL для доступа к файлу
                 string fileUrl = $"{_baseUrl}/mp3/{HttpUtility.UrlEncode(uniqueFileName)}";
                 
-                _logger.LogInformation("Файл успешно сохранен: {DestinationPath}, URL: {FileUrl}", destinationPath, fileUrl);
+                _logger.LogInformation("File saved successfully: {DestinationPath}, URL: {FileUrl}", destinationPath, fileUrl);
                 
                 return Task.FromResult(fileUrl);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при загрузке файла: {FilePath}", filePath);
+                _logger.LogError(ex, "Error uploading file: {FilePath}", filePath);
                 throw;
             }
         }
@@ -210,24 +204,24 @@ namespace FileConverter.Services
                     if (File.Exists(filePath))
                     {
                         File.Delete(filePath);
-                        _logger.LogInformation($"Файл удален: {filePath}");
+                        _logger.LogInformation($"File deleted: {filePath}");
                         return Task.FromResult(true);
                     }
                     else
                     {
-                        _logger.LogWarning($"Файл для удаления не найден: {filePath}");
+                        _logger.LogWarning($"File to delete not found: {filePath}");
                     }
                 }
                 else
                 {
-                    _logger.LogWarning($"Невозможно удалить файл из внешнего источника: {url}");
+                    _logger.LogWarning($"Cannot delete file from external source: {url}");
                 }
                 
                 return Task.FromResult(false);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при удалении файла: {url}");
+                _logger.LogError(ex, $"Error deleting file: {url}");
                 return Task.FromResult(false);
             }
         }

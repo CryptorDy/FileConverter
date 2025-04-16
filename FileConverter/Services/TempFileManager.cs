@@ -21,13 +21,13 @@ namespace FileConverter.Services
             if (!string.IsNullOrEmpty(configPath))
             {
                 _baseTempPath = configPath;
-                _logger.LogInformation("Используем путь для временных файлов из конфигурации: {Path}", _baseTempPath);
+                _logger.LogInformation("Using temporary files path from configuration: {Path}", _baseTempPath);
             }
             else
             {
                 // Используем стандартную временную директорию
                 _baseTempPath = Path.Combine(Path.GetTempPath(), "FileConverter", "Temp");
-                _logger.LogInformation("Путь к временным файлам не указан в конфигурации, используем стандартный: {Path}", _baseTempPath);
+                _logger.LogInformation("Temporary files path not specified in configuration, using default: {Path}", _baseTempPath);
             }
                 
             // Максимальный размер директории временных файлов (по умолчанию 10 ГБ)
@@ -41,23 +41,23 @@ namespace FileConverter.Services
                 if (!Directory.Exists(_baseTempPath))
                 {
                     Directory.CreateDirectory(_baseTempPath);
-                    _logger.LogInformation("Создана директория для временных файлов: {Path}", _baseTempPath);
+                    _logger.LogInformation("Created temporary files directory: {Path}", _baseTempPath);
                 }
             }
             catch (Exception ex)
             {
                 // Если не удалось создать указанную директорию, используем запасной вариант
-                _logger.LogError(ex, "Не удалось создать директорию {Path} для временных файлов", _baseTempPath);
+                _logger.LogError(ex, "Failed to create directory {Path} for temporary files", _baseTempPath);
                 
                 // Используем другой путь в качестве запасного варианта
                 _baseTempPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Temp");
-                _logger.LogWarning("Используем запасной путь для временных файлов: {Path}", _baseTempPath);
+                _logger.LogWarning("Using fallback path for temporary files: {Path}", _baseTempPath);
                 
                 // Создаем запасную директорию
                 Directory.CreateDirectory(_baseTempPath);
             }
             
-            _logger.LogInformation("Инициализирован менеджер временных файлов. Директория: {Path}, максимальный размер: {Size:F2} ГБ", 
+            _logger.LogInformation("Initialized temporary file manager. Directory: {Path}, max size: {Size:F2} GB", 
                 _baseTempPath, _maxTotalSizeBytes / (1024 * 1024 * 1024.0));
         }
 
@@ -91,7 +91,7 @@ namespace FileConverter.Services
             // Записываем данные в файл
             await File.WriteAllBytesAsync(filePath, data);
             
-            _logger.LogDebug($"Создан временный файл: {filePath}, размер: {data.Length / 1024.0:F2} КБ");
+            _logger.LogDebug($"Created temporary file: {filePath}, size: {data.Length / 1024.0:F2} KB");
             
             return filePath;
         }
@@ -100,40 +100,40 @@ namespace FileConverter.Services
         {
             if (string.IsNullOrEmpty(filePath))
             {
-                _logger.LogWarning("Попытка удалить файл с пустым путем");
+                _logger.LogWarning("Attempt to delete file with empty path");
                 return;
             }
 
             if (!File.Exists(filePath))
             {
-                _logger.LogWarning($"Файл не существует: {filePath}");
+                _logger.LogWarning($"File does not exist: {filePath}");
                 return;
             }
             
             try
             {
-                // Проверяем, находится ли файл в нашей директории
+                // Check if the file is in our directory
                 if (IsInTempDirectory(filePath))
                 {
                     File.Delete(filePath);
-                    _logger.LogInformation($"Удален временный файл: {filePath}");
+                    _logger.LogInformation($"Temporary file deleted: {filePath}");
                 }
                 else
                 {
-                    _logger.LogWarning($"Попытка удалить файл вне директории временных файлов: {filePath}. Базовая директория: {_baseTempPath}");
+                    _logger.LogWarning($"Attempt to delete file outside temporary directory: {filePath}. Base directory: {_baseTempPath}");
                 }
             }
             catch (UnauthorizedAccessException ex)
             {
-                _logger.LogError(ex, $"Отказано в доступе при удалении файла: {filePath}. Проверьте права доступа.");
+                _logger.LogError(ex, $"Access denied when deleting file: {filePath}. Check access rights.");
             }
             catch (IOException ex)
             {
-                _logger.LogError(ex, $"Ошибка ввода-вывода при удалении файла: {filePath}. Возможно файл используется другим процессом.");
+                _logger.LogError(ex, $"IO error when deleting file: {filePath}. File may be used by another process.");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Неизвестная ошибка при удалении временного файла: {filePath}");
+                _logger.LogError(ex, $"Unknown error when deleting temporary file: {filePath}");
             }
         }
 
@@ -145,14 +145,14 @@ namespace FileConverter.Services
                 int deletedCount = 0;
                 long freedSpace = 0;
                 
-                // Проверяем все файлы в директории и поддиректориях
+                // Check all files in the directory and subdirectories
                 foreach (string file in Directory.GetFiles(_baseTempPath, "*", SearchOption.AllDirectories))
                 {
                     try
                     {
                         FileInfo fileInfo = new FileInfo(file);
                         
-                        // Проверяем, старше ли файл указанного возраста
+                        // Check if the file is older than the specified age
                         if (fileInfo.LastWriteTimeUtc < cutoffTime)
                         {
                             long fileSize = fileInfo.Length;
@@ -161,16 +161,16 @@ namespace FileConverter.Services
                             deletedCount++;
                             freedSpace += fileSize;
                             
-                            _logger.LogDebug($"Удален старый временный файл: {file}, возраст: {(DateTime.UtcNow - fileInfo.LastWriteTimeUtc).TotalHours:F1} ч");
+                            _logger.LogDebug($"Deleted old temporary file: {file}, age: {(DateTime.UtcNow - fileInfo.LastWriteTimeUtc).TotalHours:F1} h");
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, $"Не удалось удалить временный файл: {file}");
+                        _logger.LogWarning(ex, $"Failed to delete temporary file: {file}");
                     }
                 }
                 
-                // Удаляем пустые директории
+                // Delete empty directories
                 foreach (string dir in Directory.GetDirectories(_baseTempPath, "*", SearchOption.AllDirectories))
                 {
                     try
@@ -178,29 +178,29 @@ namespace FileConverter.Services
                         if (!Directory.EnumerateFileSystemEntries(dir).Any())
                         {
                             Directory.Delete(dir);
-                            _logger.LogDebug($"Удалена пустая директория: {dir}");
+                            _logger.LogDebug($"Deleted empty directory: {dir}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, $"Не удалось удалить директорию: {dir}");
+                        _logger.LogWarning(ex, $"Failed to delete directory: {dir}");
                     }
                 }
                 
                 if (deletedCount > 0)
                 {
-                    _logger.LogInformation($"Очистка временных файлов: удалено {deletedCount} файлов, освобождено {freedSpace / (1024.0 * 1024):F2} МБ");
+                    _logger.LogInformation($"Temporary files cleanup: deleted {deletedCount} files, freed {freedSpace / (1024.0 * 1024):F2} MB");
                 }
                 
-                // При необходимости, вызываем принудительную сборку мусора
-                if (freedSpace > 100 * 1024 * 1024) // Если освободили более 100 МБ
+                // Trigger garbage collection if necessary
+                if (freedSpace > 100 * 1024 * 1024) // If more than 100 MB freed
                 {
                     GC.Collect();
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при очистке временных файлов");
+                _logger.LogError(ex, "Error while cleaning up temporary files");
             }
         }
 
@@ -233,7 +233,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при получении статистики временных файлов");
+                _logger.LogError(ex, "Error getting temporary files statistics");
             }
 
             stats.TotalFiles = totalFiles;
@@ -284,26 +284,26 @@ namespace FileConverter.Services
         {
             try
             {
-                // Проверяем, находится ли файл в нашей директории
+                // Check if the file is in our directory
                 string fullPath = Path.GetFullPath(filePath);
                 string fullTempPath = Path.GetFullPath(_baseTempPath);
                 
                 // Нормализуем пути для сравнения
-                fullPath = fullPath.Replace('\\', '/').TrimEnd('/');
-                fullTempPath = fullTempPath.Replace('\\', '/').TrimEnd('/');
+                fullPath = fullPath.Replace("\\", "/").TrimEnd('/');
+                fullTempPath = fullTempPath.Replace("\\", "/").TrimEnd('/');
                 
                 bool isInTempDir = fullPath.StartsWith(fullTempPath, StringComparison.OrdinalIgnoreCase);
                 
                 if (!isInTempDir)
                 {
-                    _logger.LogWarning($"Попытка доступа к файлу вне временной директории. Файл: {fullPath}, Временная директория: {fullTempPath}");
+                    _logger.LogWarning($"Attempt to access file outside of temporary directory. File: {fullPath}, Temp directory: {fullTempPath}");
                 }
                 
                 return isInTempDir;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при проверке принадлежности файла к временной директории: {filePath}");
+                _logger.LogError(ex, $"Error checking if file belongs to temporary directory: {filePath}");
                 return false;
             }
         }
@@ -314,35 +314,35 @@ namespace FileConverter.Services
             {
                 var stats = GetTempFileStatsAsync().GetAwaiter().GetResult();
                 
-                // Если общий размер плюс требуемые байты превышает лимит
+                // If total size plus required bytes exceeds the limit
                 if (stats.TotalSizeBytes + requiredBytes > _maxTotalSizeBytes)
                 {
-                    _logger.LogWarning($"Превышен лимит размера временной директории: {stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} ГБ + {requiredBytes / (1024.0 * 1024):F2} МБ > {_maxTotalSizeBytes / (1024.0 * 1024 * 1024):F2} ГБ");
+                    _logger.LogWarning($"Temporary directory size limit exceeded: {stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} GB + {requiredBytes / (1024.0 * 1024):F2} MB > {_maxTotalSizeBytes / (1024.0 * 1024 * 1024):F2} GB");
                     
-                    // Пытаемся освободить место, начиная со старых файлов
+                    // Try to free up space, starting with old files
                     CleanupOldTempFilesAsync(TimeSpan.FromHours(24)).GetAwaiter().GetResult();
                     
-                    // Проверяем снова
+                    // Check again
                     stats = GetTempFileStatsAsync().GetAwaiter().GetResult();
                     if (stats.TotalSizeBytes + requiredBytes > _maxTotalSizeBytes)
                     {
-                        // Если все еще не хватает места, освобождаем более новые файлы
+                        // If still not enough space, free up newer files
                         CleanupOldTempFilesAsync(TimeSpan.FromHours(1)).GetAwaiter().GetResult();
                         
-                        // Последняя проверка
+                        // Last check
                         stats = GetTempFileStatsAsync().GetAwaiter().GetResult();
                         if (stats.TotalSizeBytes + requiredBytes > _maxTotalSizeBytes)
                         {
-                            // Если все еще не хватает места, выдаем ошибку
-                            throw new IOException($"Недостаточно места в директории временных файлов. Требуется {requiredBytes / (1024.0 * 1024):F2} МБ, доступно {(_maxTotalSizeBytes - stats.TotalSizeBytes) / (1024.0 * 1024):F2} МБ");
+                            // If still not enough space, throw an error
+                            throw new IOException($"Not enough space in the temporary files directory. Required {requiredBytes / (1024.0 * 1024):F2} MB, available {(_maxTotalSizeBytes - stats.TotalSizeBytes) / (1024.0 * 1024):F2} MB");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при проверке доступного места");
-                // Продолжаем выполнение, чтобы не блокировать работу, даже если нет места
+                _logger.LogError(ex, "Error checking available space");
+                // Continue execution to avoid blocking work, even if there is no space
             }
         }
     }

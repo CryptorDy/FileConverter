@@ -34,7 +34,7 @@ namespace FileConverter.Services
                 // Проверяем кэш
                 if (_cacheManager.TryGetMp3Url(videoUrl, out string cachedMp3Url))
                 {
-                    _logger.LogInformation($"Найден кэшированный результат для {videoUrl}: {cachedMp3Url}");
+                    _logger.LogInformation($"Found cached result for {videoUrl}: {cachedMp3Url}");
                     
                     // Создаем задачу, но сразу помечаем как завершенную
                     var job = new ConversionJob 
@@ -68,7 +68,7 @@ namespace FileConverter.Services
                 // Запускаем задачу конвертации асинхронно через Hangfire
                 _backgroundJobClient.Enqueue<IVideoProcessor>(p => p.ProcessVideo(newJob.Id));
 
-                _logger.LogInformation($"Задача конвертации создана: {newJob.Id} для {videoUrl}");
+                _logger.LogInformation($"Conversion task created: {newJob.Id} for {videoUrl}");
                 
                 string apiBaseUrl = _configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
                 
@@ -80,7 +80,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка создания задачи для {videoUrl}");
+                _logger.LogError(ex, $"Error creating task for {videoUrl}");
                 throw;
             }
         }
@@ -114,7 +114,7 @@ namespace FileConverter.Services
                         {
                             job.Mp3Url = cachedMp3Url;
                             job.CompletedAt = DateTime.UtcNow;
-                            _logger.LogInformation($"Найден кэшированный результат для {videoUrl} в пакете {batchJob.Id}");
+                            _logger.LogInformation($"Found cached result for {videoUrl} in batch {batchJob.Id}");
                         }
                         
                         await _repository.CreateJobAsync(job);
@@ -135,7 +135,7 @@ namespace FileConverter.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, $"Ошибка при добавлении задачи для {videoUrl} в пакет {batchJob.Id}");
+                        _logger.LogError(ex, $"Error adding task for {videoUrl} to batch {batchJob.Id}");
                         // Продолжаем с другими URL, не прерывая весь пакет
                     }
                 }
@@ -149,7 +149,7 @@ namespace FileConverter.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка создания пакетной задачи");
+                _logger.LogError(ex, "Error creating batch task");
                 throw;
             }
         }
@@ -160,7 +160,7 @@ namespace FileConverter.Services
             
             if (job == null)
             {
-                throw new KeyNotFoundException($"Задача с ID {jobId} не найдена");
+                throw new KeyNotFoundException($"Task with ID {jobId} not found");
             }
             
             return new JobStatusResponse
@@ -179,7 +179,7 @@ namespace FileConverter.Services
             
             if (!jobs.Any())
             {
-                throw new KeyNotFoundException($"Пакет задач с ID {batchId} не найден");
+                throw new KeyNotFoundException($"Batch task with ID {batchId} not found");
             }
             
             return jobs.Select(job => new JobStatusResponse
@@ -246,34 +246,11 @@ namespace FileConverter.Services
             }
             catch (ObjectDisposedException ex)
             {
-                // Обрабатываем ошибку доступа к disposed контексту
-                logger.LogError(ex, "Ошибка при обновлении статуса задачи {JobId}: Context был уничтожен. Статус: {Status}", 
-                    jobId, status);
-                
-                // В этом случае мы не можем обновить статус задачи через базу данных,
-                // но можем кэшировать результат, если это требуется
-                if (status == ConversionStatus.Completed && mp3Url != null)
-                {
-                    try
-                    {
-                        // Просто сохраняем в кэш с примерным ключом
-                        // Поскольку у нас нет возможности получить видео URL из уничтоженного контекста
-                        // мы используем jobId как часть ключа
-                        string estimatedKey = $"job_{jobId}";
-                        logger.LogWarning("Сохраняем URL MP3 в кэш под примерным ключом: {Key}", estimatedKey);
-                        cacheManager.CacheMp3Url(estimatedKey, mp3Url);
-                    }
-                    catch (Exception cacheEx)
-                    {
-                        logger.LogError(cacheEx, "Не удалось обновить кэш для задачи {JobId}", jobId);
-                    }
-                }
+                logger.LogError(ex, "DbContext was disposed when updating job status for {JobId}. This might indicate context lifetime issues.", jobId);
             }
             catch (Exception ex)
             {
-                // Обработка других ошибок
-                logger.LogError(ex, "Ошибка при обновлении статуса задачи {JobId}: {ErrorMessage}", 
-                    jobId, ex.Message);
+                logger.LogError(ex, "Error updating job status for {JobId}", jobId);
             }
         }
     }

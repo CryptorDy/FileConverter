@@ -7,10 +7,10 @@ namespace FileConverter.Services
         private readonly ILogger<UrlValidator> _logger;
         private readonly IConfiguration _configuration;
         
-        // Максимальный размер файла для скачивания (по умолчанию 500 МБ)
+        // Maximum file size for download (default 500 MB)
         private readonly long _maxFileSize;
         
-        // Список разрешенных типов контента из конфигурации
+        // List of allowed content types from configuration
         private readonly HashSet<string> _allowedContentTypes;
 
         public UrlValidator(ILogger<UrlValidator> logger, IConfiguration configuration)
@@ -18,76 +18,76 @@ namespace FileConverter.Services
             _logger = logger;
             _configuration = configuration;
             
-            // Загружаем максимальный размер файла из конфигурации (в байтах)
+            // Loading maximum file size from configuration (in bytes)
             _maxFileSize = long.TryParse(_configuration["FileConverter:MaxFileSizeBytes"], out long maxSize)
                 ? maxSize
-                : 500L * 1024 * 1024; // 500 МБ по умолчанию
+                : 500L * 1024 * 1024; // 500 MB default
             
-            // Загружаем список разрешенных типов контента из конфигурации
+            // Loading list of allowed content types from configuration
             _allowedContentTypes = new HashSet<string>(
                 _configuration.GetSection("FileConverter:AllowedFileTypes").Get<string[]>() ?? 
                 new[] { "video/mp4", "video/webm", "audio/mpeg", "audio/mp4" }
             );
                 
-            _logger.LogInformation($"Инициализирован валидатор URL. " +
-                                  $"Максимальный размер файла: {_maxFileSize / (1024.0 * 1024):F2} МБ, " +
-                                  $"Разрешенные типы контента: {string.Join(", ", _allowedContentTypes)}");
+            _logger.LogInformation($"Initialized URL validator. " +
+                                  $"Max file size: {_maxFileSize / (1024.0 * 1024):F2} MB, " +
+                                  $"Allowed content types: {string.Join(", ", _allowedContentTypes)}");
         }
 
         /// <summary>
-        /// Проверяет, является ли URL безопасным и допустимым
+        /// Checks if URL is safe and valid
         /// </summary>
         public bool IsUrlValid(string url)
         {
             try
             {
-                // Проверка на null или пустую строку
+                // Check for null or empty string
                 if (string.IsNullOrWhiteSpace(url))
                 {
-                    _logger.LogWarning("Получен пустой URL");
+                    _logger.LogWarning("Empty URL received");
                     return false;
                 }
                 
-                // Проверка, что URL корректный
+                // Check that URL is valid
                 if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || 
                     (uri.Scheme != "http" && uri.Scheme != "https"))
                 {
-                    _logger.LogWarning($"Некорректный URL: {url}");
+                    _logger.LogWarning($"Invalid URL: {url}");
                     return false;
                 }
                 
-                // Проверка на локальные адреса (localhost, 127.0.0.1 и т.д.)
+                // Check for local addresses (localhost, 127.0.0.1, etc.)
                 if (IsLocalHost(uri))
                 {
-                    _logger.LogWarning($"Запрещен доступ к локальным адресам: {url}");
+                    _logger.LogWarning($"Access to local addresses forbidden: {url}");
                     return false;
                 }
                 
-                // Проверка на потенциально опасные файлы
+                // Check for potentially dangerous files
                 if (IsPotentiallyDangerousFile(url))
                 {
-                    _logger.LogWarning($"Потенциально опасный тип файла: {url}");
+                    _logger.LogWarning($"Potentially dangerous file type: {url}");
                     return false;
                 }
                 
-                // Особая обработка для социальных сетей
+                // Special handling for social media
                 if (IsSocialMediaUrl(uri))
                 {
-                    _logger.LogInformation($"Обнаружен URL социальной сети: {uri.Host}. Возможно потребуются особые заголовки для доступа.");
-                    // Мы разрешаем URL социальных сетей, но предупреждаем о возможных проблемах
+                    _logger.LogInformation($"Social media URL detected: {uri.Host}. Special headers may be required for access.");
+                    // We allow social media URLs but warn about possible issues
                 }
                 
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при проверке URL: {url}");
+                _logger.LogError(ex, $"Error validating URL: {url}", url);
                 return false;
             }
         }
         
         /// <summary>
-        /// Проверяет размер файла по URL (делает HEAD запрос)
+        /// Checks file size by URL (makes HEAD request)
         /// </summary>
         public async Task<bool> IsFileSizeValid(string url)
         {
@@ -96,37 +96,37 @@ namespace FileConverter.Services
                 using var httpClient = new HttpClient();
                 httpClient.DefaultRequestHeaders.Add("User-Agent", "FileConverter/1.0");
                 
-                // Сначала делаем HEAD запрос для проверки размера
+                // First make a HEAD request to check size
                 using var request = new HttpRequestMessage(HttpMethod.Head, url);
                 using var response = await httpClient.SendAsync(request);
                 
-                // Получаем Content-Length, если есть
+                // Get Content-Length if available
                 if (response.Content.Headers.ContentLength.HasValue)
                 {
                     long fileSize = response.Content.Headers.ContentLength.Value;
                     if (fileSize > _maxFileSize)
                     {
-                        _logger.LogWarning($"Превышен максимальный размер файла: {url}, размер: {fileSize / (1024.0 * 1024):F2} МБ");
+                        _logger.LogWarning($"Maximum file size exceeded: {url}, size: {fileSize / (1024.0 * 1024):F2} MB");
                         return false;
                     }
                     
-                    _logger.LogInformation($"Размер файла для {url}: {fileSize / (1024.0 * 1024):F2} МБ");
+                    _logger.LogInformation($"File size for {url}: {fileSize / (1024.0 * 1024):F2} MB");
                     return true;
                 }
                 
-                // Если размер не указан в заголовках, мы не можем проверить размер
-                _logger.LogWarning($"Невозможно определить размер файла для {url}");
-                return true; // Считаем, что размер в порядке, если не можем его определить
+                // If size is not specified in headers, we cannot check the size
+                _logger.LogWarning($"Unable to determine file size for {url}");
+                return true; // We assume the size is okay if we can't determine it
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при проверке размера файла: {url}");
-                return false; // В случае ошибки считаем, что файл недопустим
+                _logger.LogError(ex, $"Error checking file size: {url}");
+                return false; // In case of error, we consider the file invalid
             }
         }
         
         /// <summary>
-        /// Проверяет MIME-тип файла
+        /// Checks file MIME type
         /// </summary>
         public async Task<(bool isValid, string contentType)> IsContentTypeValid(string url)
         {
@@ -135,54 +135,54 @@ namespace FileConverter.Services
                 using var httpClient = new HttpClient();
                 httpClient.DefaultRequestHeaders.Add("User-Agent", "FileConverter/1.0");
                 
-                // Делаем HEAD запрос для проверки типа контента
+                // Make a HEAD request to check content type
                 using var request = new HttpRequestMessage(HttpMethod.Head, url);
                 using var response = await httpClient.SendAsync(request);
                 
                 string contentType = response.Content.Headers.ContentType?.MediaType ?? "";
                 
-                // Проверяем по списку разрешенных типов контента
+                // Check against list of allowed content types
                 if (string.IsNullOrEmpty(contentType))
                 {
-                    _logger.LogWarning($"Пустой тип контента для {url}");
+                    _logger.LogWarning($"Empty content type for {url}");
                     return (false, "empty");
                 }
                 
-                // Специальная обработка для text/plain - это может быть неправильный тип от некоторых серверов
+                // Special handling for text/plain - this may be incorrect type from some servers
                 if (contentType == "text/plain")
                 {
-                    // Проверим расширение файла в URL
+                    // Check file extension in URL
                     Uri uri = new Uri(url);
                     string filename = Path.GetFileName(uri.LocalPath);
                     string extension = Path.GetExtension(filename).ToLowerInvariant();
                     
-                    // Если у файла расширение видео или аудио, разрешаем его несмотря на тип контента
+                    // If the file has video or audio extension, allow it despite content type
                     if (!string.IsNullOrEmpty(extension) && 
                         (extension == ".mp4" || extension == ".mov" || extension == ".mp3" || 
                          extension == ".avi" || extension == ".webm" || extension == ".ogg"))
                     {
-                        _logger.LogWarning($"Получен text/plain для {url}, но у файла расширение {extension}. Разрешаем загрузку.");
+                        _logger.LogWarning($"Received text/plain for {url}, but file has extension {extension}. Allowing download.");
                         return (true, $"video/{extension.TrimStart('.')}");
                     }
                 }
                 
                 if (!_allowedContentTypes.Contains(contentType))
                 {
-                    _logger.LogWarning($"Недопустимый тип контента для {url}: {contentType}");
+                    _logger.LogWarning($"Invalid content type for {url}: {contentType}");
                     return (false, contentType);
                 }
                 
-                _logger.LogInformation($"Тип контента для {url}: {contentType}");
+                _logger.LogInformation($"Content type for {url}: {contentType}");
                 return (true, contentType);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Ошибка при проверке типа контента: {url}");
+                _logger.LogError(ex, $"Error checking content type: {url}");
                 return (false, "error");
             }
         }
         
-        // Вспомогательные методы
+        // Helper methods
         private bool IsLocalHost(Uri uri)
         {
             string host = uri.Host.ToLower();
@@ -195,13 +195,13 @@ namespace FileConverter.Services
         
         private bool IsIpAddress(string host)
         {
-            // Проверка IPv4
+            // Check IPv4
             if (System.Net.IPAddress.TryParse(host, out _))
             {
                 return true;
             }
             
-            // Проверка на частные IPv4 диапазоны в формате доменов
+            // Check for private IPv4 ranges in domain format
             string[] parts = host.Split('.');
             if (parts.Length == 4 && parts.All(p => int.TryParse(p, out _)))
             {
@@ -213,10 +213,10 @@ namespace FileConverter.Services
         
         private bool IsPotentiallyDangerousFile(string url)
         {
-            // Проверяем расширение файла, если оно есть
+            // Check file extension if available
             string extension = Path.GetExtension(new Uri(url).AbsolutePath).ToLower();
             
-            // Список потенциально опасных расширений
+            // List of potentially dangerous extensions
             string[] dangerousExtensions = { 
                 ".exe", ".dll", ".bat", ".cmd", ".sh", ".ps1", ".vbs", ".wsf", ".reg", 
                 ".hta", ".pif", ".scr", ".inf", ".msi", ".com", ".js", ".jse" 
@@ -226,13 +226,13 @@ namespace FileConverter.Services
         }
         
         /// <summary>
-        /// Определяет, принадлежит ли URL социальной сети или видеохостингу
+        /// Determines if URL belongs to a social network or video hosting service
         /// </summary>
         private bool IsSocialMediaUrl(Uri uri)
         {
             string host = uri.Host.ToLowerInvariant();
             
-            // Список доменов социальных сетей и видеохостингов
+            // List of social media and video hosting domains
             string[] socialMediaDomains = new[]
             {
                 "instagram.com", "fbcdn.net", "facebook.com", 

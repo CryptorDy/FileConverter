@@ -43,18 +43,18 @@ namespace FileConverter.Services
         {
             try
             {
-                _logger.LogInformation($"Запуск очистки временных файлов старше {age.TotalHours:F1} часов");
+                _logger.LogInformation($"Starting cleanup of temporary files older than {age.TotalHours:F1} hours");
                 
                 var statsBefore = await _tempFileManager.GetTempFileStatsAsync();
                 await _tempFileManager.CleanupOldTempFilesAsync(age);
                 var statsAfter = await _tempFileManager.GetTempFileStatsAsync();
                 
-                _logger.LogInformation($"Завершена очистка временных файлов. Было: {statsBefore.TotalFiles} файлов ({statsBefore.TotalSizeBytes / (1024.0 * 1024):F2} МБ), " +
-                                      $"стало: {statsAfter.TotalFiles} файлов ({statsAfter.TotalSizeBytes / (1024.0 * 1024):F2} МБ)");
+                _logger.LogInformation($"Temporary files cleanup finished. Before: {statsBefore.TotalFiles} files ({statsBefore.TotalSizeBytes / (1024.0 * 1024):F2} MB), " +
+                                      $"After: {statsAfter.TotalFiles} files ({statsAfter.TotalSizeBytes / (1024.0 * 1024):F2} MB)");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при очистке временных файлов");
+                _logger.LogError(ex, "Error during temporary files cleanup");
                 throw; // Позволяем Hangfire повторить задачу
             }
         }
@@ -67,12 +67,12 @@ namespace FileConverter.Services
         {
             try
             {
-                _logger.LogInformation("Запуск глубокой очистки временных файлов");
+                _logger.LogInformation("Starting deep cleanup of temporary files");
                 
                 // Сначала получаем статистику
                 var stats = await _tempFileManager.GetTempFileStatsAsync();
-                _logger.LogInformation($"Статистика временных файлов: {stats.TotalFiles} файлов ({stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} ГБ), " +
-                                      $"из них старше 24 часов: {stats.OldFiles} файлов ({stats.OldFilesSizeBytes / (1024.0 * 1024):F2} МБ)");
+                _logger.LogInformation($"Temporary file stats: {stats.TotalFiles} files ({stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} GB), " +
+                                      $"of which older than 24 hours: {stats.OldFiles} files ({stats.OldFilesSizeBytes / (1024.0 * 1024):F2} MB)");
                 
                 // Сначала очищаем старые файлы (старше 24 часов)
                 await _tempFileManager.CleanupOldTempFilesAsync(TimeSpan.FromHours(24));
@@ -87,25 +87,25 @@ namespace FileConverter.Services
                     
                 if (stats.TotalSizeBytes > maxSize * 0.8)
                 {
-                    _logger.LogWarning($"Обнаружено большое использование места временными файлами: {stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} ГБ");
+                    _logger.LogWarning($"High temporary file usage detected: {stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} GB");
                     await _tempFileManager.CleanupOldTempFilesAsync(TimeSpan.FromHours(12));
                     
                     // Если по-прежнему много места используется, очищаем еще более новые файлы
                     stats = await _tempFileManager.GetTempFileStatsAsync();
                     if (stats.TotalSizeBytes > maxSize * 0.7)
                     {
-                        _logger.LogWarning("Выполняется агрессивная очистка временных файлов");
+                        _logger.LogWarning("Performing aggressive temporary file cleanup");
                         await _tempFileManager.CleanupOldTempFilesAsync(TimeSpan.FromHours(6));
                     }
                 }
                 
                 // Финальная статистика
                 stats = await _tempFileManager.GetTempFileStatsAsync();
-                _logger.LogInformation($"Глубокая очистка завершена. Текущая статистика: {stats.TotalFiles} файлов ({stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} ГБ)");
+                _logger.LogInformation($"Deep cleanup finished. Current stats: {stats.TotalFiles} files ({stats.TotalSizeBytes / (1024.0 * 1024 * 1024):F2} GB)");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при глубокой очистке временных файлов");
+                _logger.LogError(ex, "Error during deep cleanup of temporary files");
                 throw; // Позволяем Hangfire повторить задачу
             }
         }
