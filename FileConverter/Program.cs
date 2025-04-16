@@ -9,11 +9,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using System.Threading.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Http;  // Для HttpClient
-using Microsoft.AspNetCore.Hosting; // Для UseUrls
 using Serilog;
 using System.Text;
-
+using Amazon.S3;
+using FileConverter.Services.Interfaces;
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var encoding = Encoding.GetEncoding(1251);
@@ -23,11 +22,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Настройка Serilog
 Log.Logger = new LoggerConfiguration()
     .ReadFrom.Configuration(builder.Configuration)
-    .Enrich.WithMachineName()
     .Enrich.WithProperty("Environment", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"))
     .Enrich.WithProperty("ApplicationName", "FileConverter")
     .Enrich.FromLogContext()
-    .Enrich.WithThreadId()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(
         $"Logs/FileConverter-All-.log",
@@ -148,17 +145,16 @@ builder.Services.AddHangfireServer(options =>
 
 // Регистрируем репозиторий и сервисы
 builder.Services.AddScoped<IJobRepository, JobRepository>();
-builder.Services.AddSingleton<IS3StorageService, LocalStorageService>();
-builder.Services.AddScoped<IFileConverterService, FileConverterService>();
-builder.Services.AddScoped<IJobManager, DbJobManager>(); // Заменяем на реализацию с БД
-builder.Services.AddScoped<IVideoProcessor, VideoProcessor>();
+builder.Services.AddScoped<IMediaItemRepository, MediaItemRepository>();
+builder.Services.AddScoped<IS3StorageService, S3StorageService>();
+builder.Services.AddScoped<IJobManager, DbJobManager>();
+builder.Services.AddScoped<IVideoConverter, VideoConverter>();
+builder.Services.AddHttpClient();
 
 // Кэширование и временные файлы
-builder.Services.AddSingleton<CacheManager>();
 builder.Services.AddSingleton<DistributedCacheManager>();
 builder.Services.AddSingleton<ITempFileManager, TempFileManager>();
 builder.Services.AddScoped<TempFileCleanupJob>();
-builder.Services.AddScoped<Mp3CleanupJob>(); // Добавляем сервис для очистки MP3
 builder.Services.AddSingleton<UrlValidator>();
 
 // Метрики и мониторинг
@@ -344,7 +340,6 @@ app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks
 
 // Запускаем фоновые задачи
 TempFileCleanupJob.ScheduleJobs();
-Mp3CleanupJob.ScheduleJobs(); // Запускаем очистку MP3
 
 // Логируем запуск приложения
 Log.Information("FileConverter application started in {Environment} environment", 

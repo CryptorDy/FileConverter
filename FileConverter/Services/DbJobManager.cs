@@ -1,5 +1,6 @@
 using FileConverter.Data;
 using FileConverter.Models;
+using FileConverter.Services.Interfaces;
 using Hangfire;
 using Microsoft.Extensions.Logging;
 
@@ -11,67 +12,46 @@ namespace FileConverter.Services
         private readonly IBackgroundJobClient _backgroundJobClient;
         private readonly ILogger<DbJobManager> _logger;
         private readonly IConfiguration _configuration;
-        private readonly CacheManager _cacheManager;
         
         public DbJobManager(
             IJobRepository repository,
             IBackgroundJobClient backgroundJobClient,
             ILogger<DbJobManager> logger,
-            IConfiguration configuration,
-            CacheManager cacheManager)
+            IConfiguration configuration)
         {
             _repository = repository;
             _backgroundJobClient = backgroundJobClient;
             _logger = logger;
             _configuration = configuration;
-            _cacheManager = cacheManager;
         }
 
         public async Task<ConversionJobResponse> EnqueueConversionJob(string videoUrl)
         {
             try
             {
-                // Проверяем кэш
-                if (_cacheManager.TryGetMp3Url(videoUrl, out string cachedMp3Url))
+                // Проверяем наличие URL
+                if (string.IsNullOrEmpty(videoUrl))
                 {
-                    _logger.LogInformation($"Found cached result for {videoUrl}: {cachedMp3Url}");
-                    
-                    // Создаем задачу, но сразу помечаем как завершенную
-                    var job = new ConversionJob 
-                    { 
-                        VideoUrl = videoUrl,
-                        Status = ConversionStatus.Completed,
-                        Mp3Url = cachedMp3Url,
-                        CompletedAt = DateTime.UtcNow
-                    };
-                    
-                    await _repository.CreateJobAsync(job);
-                    
-                    string baseUrl = _configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
-                    
-                    return new ConversionJobResponse
-                    {
-                        JobId = job.Id,
-                        StatusUrl = $"{baseUrl}/api/videoconverter/status/{job.Id}"
-                    };
+                    throw new ArgumentException("URL видео не может быть пустым");
                 }
                 
-                // Если не нашли в кэше, создаем новую задачу
-                var newJob = new ConversionJob 
-                { 
+                // Создаем новую задачу конвертации
+                var newJob = new ConversionJob
+                {
                     VideoUrl = videoUrl,
                     Status = ConversionStatus.Pending
                 };
                 
+                // Сохраняем в БД
                 await _repository.CreateJobAsync(newJob);
                 
-                // Запускаем задачу конвертации асинхронно через Hangfire
-                _backgroundJobClient.Enqueue<IVideoProcessor>(p => p.ProcessVideo(newJob.Id));
-
-                _logger.LogInformation($"Conversion task created: {newJob.Id} for {videoUrl}");
+                // Запускаем задачу в фоновом режиме
+                _backgroundJobClient.Enqueue<IVideoConverter>(p => p.ProcessVideo(newJob.Id));
                 
+                // Формируем URL для проверки статуса
                 string apiBaseUrl = _configuration["AppSettings:BaseUrl"] ?? "https://localhost:7134";
                 
+                // Возвращаем информацию о задаче
                 return new ConversionJobResponse
                 {
                     JobId = newJob.Id,
@@ -99,31 +79,18 @@ namespace FileConverter.Services
                 {
                     try 
                     {
-                        // Проверяем кэш
-                        bool isCached = _cacheManager.TryGetMp3Url(videoUrl, out string cachedMp3Url);
-                        
                         // Создаем задачу
                         var job = new ConversionJob 
                         { 
                             VideoUrl = videoUrl,
-                            Status = isCached ? ConversionStatus.Completed : ConversionStatus.Pending,
+                            Status = ConversionStatus.Pending,
                             BatchId = batchJob.Id
                         };
                         
-                        if (isCached)
-                        {
-                            job.Mp3Url = cachedMp3Url;
-                            job.CompletedAt = DateTime.UtcNow;
-                            _logger.LogInformation($"Found cached result for {videoUrl} in batch {batchJob.Id}");
-                        }
-                        
                         await _repository.CreateJobAsync(job);
                         
-                        // Если нет в кэше, запускаем обработку
-                        if (!isCached)
-                        {
-                            _backgroundJobClient.Enqueue<IVideoProcessor>(p => p.ProcessVideo(job.Id));
-                        }
+                        // Запускаем обработку
+                        _backgroundJobClient.Enqueue<IVideoConverter>(p => p.ProcessVideo(job.Id));
                         
                         var response = new ConversionJobResponse
                         {
@@ -135,8 +102,7 @@ namespace FileConverter.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, $"Error adding task for {videoUrl} to batch {batchJob.Id}");
-                        // Продолжаем с другими URL, не прерывая весь пакет
+                        _logger.LogError(ex, $"Error processing {videoUrl}");
                     }
                 }
 
@@ -186,6 +152,8 @@ namespace FileConverter.Services
             {
                 JobId = job.Id,
                 Status = job.Status,
+                VideoUrl = job.VideoUrl,
+                NewVideoUrl = job.NewVideoUrl,
                 Mp3Url = job.Mp3Url,
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status)
@@ -206,6 +174,19 @@ namespace FileConverter.Services
             }).ToList();
         }
 
+        public async Task<ConversionJob?> GetJobDetails(string jobId)
+        {
+            try
+            {
+                return await _repository.GetJobByIdAsync(jobId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error getting job details for {jobId}");
+                return null;
+            }
+        }
+
         // Возвращает прогресс конвертации на основе статуса
         private double GetProgressFromStatus(ConversionStatus status)
         {
@@ -224,10 +205,10 @@ namespace FileConverter.Services
         // Статический метод для обновления статуса задачи через репозиторий
         public static async Task UpdateJobStatusAsync(
             IJobRepository repository, 
-            CacheManager cacheManager,
             string jobId, 
             ConversionStatus status, 
             string? mp3Url = null, 
+            string? newVideoUrl = null,
             string? errorMessage = null)
         {
             // Создаем логгер для использования в случае ошибок
@@ -236,13 +217,7 @@ namespace FileConverter.Services
             
             try
             {
-                var job = await repository.UpdateJobStatusAsync(jobId, status, mp3Url, errorMessage);
-                
-                // Кэшируем результат если успешно завершилась конвертация
-                if (status == ConversionStatus.Completed && mp3Url != null)
-                {
-                    cacheManager.CacheMp3Url(job.VideoUrl, mp3Url);
-                }
+                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, errorMessage);
             }
             catch (ObjectDisposedException ex)
             {
@@ -253,5 +228,6 @@ namespace FileConverter.Services
                 logger.LogError(ex, "Error updating job status for {JobId}", jobId);
             }
         }
+        
     }
 } 

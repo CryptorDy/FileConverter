@@ -5,7 +5,16 @@ namespace FileConverter.Models
     public class ConversionJob
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
+
+        /// <summary>
+        /// 
+        /// </summary>
         public string VideoUrl { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// Новая ссылка на видео в хранилище после загрузки
+        /// </summary>
+        public string? NewVideoUrl { get; set; }
         public string? Mp3Url { get; set; }
         
         [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -30,6 +39,7 @@ namespace FileConverter.Models
         public string? ContentType { get; set; }
         public int ProcessingAttempts { get; set; } = 0;
         public DateTime? LastAttemptAt { get; set; }
+        public string? VideoHash { get; set; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

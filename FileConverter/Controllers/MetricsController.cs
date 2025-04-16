@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using FileConverter.Services;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using FileConverter.Services.Interfaces;
 
 namespace FileConverter.Controllers
 {

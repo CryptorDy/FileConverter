@@ -18,7 +18,7 @@ namespace FileConverter.Data
         Task<BatchJob> UpdateBatchJobAsync(BatchJob batchJob);
         
         // Специальные методы
-        Task<ConversionJob> UpdateJobStatusAsync(string jobId, ConversionStatus status, string? mp3Url = null, string? errorMessage = null);
+        Task<ConversionJob> UpdateJobStatusAsync(string jobId, ConversionStatus status, string? mp3Url, string? newVideoUrl, string? errorMessage);
         Task<int> GetPendingJobsCountAsync();
         Task<bool> AnyJobsInProcessingAsync();
         

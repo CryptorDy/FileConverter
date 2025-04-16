@@ -55,7 +55,7 @@ namespace FileConverter.Middleware
                 if (durationMs > 1000)  // Запросы дольше 1 секунды
                 {
                     _logger.LogWarning(
-                        "Медленный запрос: {Method} {Path} - {Duration} мс, Код: {StatusCode}",
+                        "Slow query: {Method} {Path} - {Duration} ms, Code: {StatusCode}",
                         context.Request.Method,
                         context.Request.Path,
                         durationMs,
@@ -64,7 +64,7 @@ namespace FileConverter.Middleware
                 else if (context.Response.StatusCode >= 400)  // Ошибочные ответы
                 {
                     _logger.LogWarning(
-                        "Запрос с ошибкой: {Method} {Path} - Код: {StatusCode}",
+                        "Request with error: {Method} {Path} - Code: {StatusCode}",
                         context.Request.Method,
                         context.Request.Path,
                         context.Response.StatusCode);
