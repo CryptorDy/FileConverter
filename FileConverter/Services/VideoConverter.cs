@@ -20,6 +20,7 @@ public class VideoConverter : IVideoConverter
     private readonly IJobRepository _repository;
     private readonly UrlValidator _urlValidator;
     private readonly HttpClient _httpClient;
+    private readonly HttpClient _instagramHttpClient;
     
     // Очередь для загрузки видео с ограничением параллельных задач
     private static readonly Channel<(string JobId, string VideoUrl)> _downloadChannel = 
@@ -64,7 +65,8 @@ public class VideoConverter : IVideoConverter
         ITempFileManager tempFileManager,
         IJobRepository repository,
         UrlValidator urlValidator,
-        HttpClient httpClient)
+        HttpClient httpClient,
+        IHttpClientFactory httpClientFactory)
     {
         _storageService = storageService;
         _mediaItemRepository = mediaItemRepository;
@@ -73,6 +75,7 @@ public class VideoConverter : IVideoConverter
         _repository = repository;
         _urlValidator = urlValidator;
         _httpClient = httpClient;
+        _instagramHttpClient = httpClientFactory.CreateClient("instagram-downloader");
         
         // Инициализация обработчиков, если они еще не запущены
         StartWorkers();
@@ -249,18 +252,11 @@ public class VideoConverter : IVideoConverter
                 {
                     try
                     {
-                        _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
-
-                        // Добавляем заголовки для обхода ограничений социальных сетей
-                        _httpClient.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
-                        _httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9,ru;q=0.8");
-                        _httpClient.DefaultRequestHeaders.Add("Referer", "https://www.instagram.com/");
-                        _httpClient.DefaultRequestHeaders.Add("sec-ch-ua", "\"Google Chrome\";v=\"123\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"123\"");
-                        _httpClient.DefaultRequestHeaders.Add("sec-ch-ua-mobile", "?0");
-                        _httpClient.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
-
+                        // Выбираем правильный HTTP клиент в зависимости от URL
+                        var httpClient = IsInstagramUrl(videoUrl) ? _instagramHttpClient : _httpClient;
+                        
                         using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
-                        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
 
                         // Обрабатываем различные коды ошибок
                         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
@@ -277,7 +273,7 @@ public class VideoConverter : IVideoConverter
                         }
                         
                         fileData = await response.Content.ReadAsByteArrayAsync();
-                        _logger.LogInformation($"Video downloaded from URL: {videoUrl}");
+                        _logger.LogInformation($"Video downloaded from URL: {videoUrl} using {(IsInstagramUrl(videoUrl) ? "Instagram proxy client" : "standard client")}");
                     }
                     catch (HttpRequestException httpEx)
                     {
@@ -346,6 +342,19 @@ public class VideoConverter : IVideoConverter
                 }
             }
         }
+    }
+    
+    /// <summary>
+    /// Проверяет, является ли URL адресом из Instagram
+    /// </summary>
+    private bool IsInstagramUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url))
+            return false;
+            
+        return url.Contains("instagram.com") || 
+               url.Contains("cdninstagram.com") || 
+               url.Contains("fbcdn.net");
     }
     
     /// <summary>

@@ -34,7 +34,7 @@ namespace FileConverter.Controllers
                     return BadRequest("Необходимо указать хотя бы один URL видео для конвертации");
                 }
 
-                _logger.LogInformation($"Получен запрос на конвертацию {request.VideoUrls.Count} видео");
+                _logger.LogInformation($"Conversion request received {request.VideoUrls.Count}");
                 
                 // Получаем результат создания пакета задач
                 var jobManagerResult = await _jobManager.EnqueueBatchJobs(request.VideoUrls);
@@ -53,7 +53,7 @@ namespace FileConverter.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при постановке задачи конвертации видео");
+                _logger.LogError(ex, "Error while setting video conversion task");
                 return StatusCode(500, "Произошла ошибка при конвертации видео. Подробности в логах сервера.");
             }
         }

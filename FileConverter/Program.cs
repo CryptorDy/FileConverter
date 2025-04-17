@@ -44,12 +44,32 @@ Log.Logger = new LoggerConfiguration()
 
 builder.Host.UseSerilog();
 
+// Регистрируем обработчик HTTP запросов с прокси
+builder.Services.AddTransient<ProxyHttpClientHandler>();
+
 // Настройка HTTP клиента
 builder.Services.AddHttpClient("video-downloader", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(
         builder.Configuration.GetValue<int>("Performance:DownloadTimeoutMinutes", 30));
 });
+
+// Добавляем именованный HTTP клиент с прокси для Instagram
+builder.Services.AddHttpClient("instagram-downloader", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(
+        builder.Configuration.GetValue<int>("Performance:DownloadTimeoutMinutes", 30));
+    
+    // Добавляем стандартные заголовки для обхода ограничений Instagram
+    client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+    client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9,ru;q=0.8");
+    client.DefaultRequestHeaders.Add("Referer", "https://www.instagram.com/");
+    client.DefaultRequestHeaders.Add("sec-ch-ua", "\"Google Chrome\";v=\"123\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"123\"");
+    client.DefaultRequestHeaders.Add("sec-ch-ua-mobile", "?0");
+    client.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
+})
+.ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
 
 // Конфигурация для высоких нагрузок
 builder.WebHost.ConfigureKestrel(options =>
