@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Amazon.Runtime;
 using Amazon;
+using System.Net.Http;
 
 namespace FileConverter.Services
 {
@@ -12,14 +13,16 @@ namespace FileConverter.Services
         private readonly IAmazonS3 _s3Client;
         private readonly ILogger<S3StorageService> _logger;
         private readonly string _bucketName;
-        private readonly HttpClient _httpClient;
+        private readonly IHttpClientFactory _httpClientFactory;
         private readonly string _serviceUrl;
 
         public S3StorageService(
             ILogger<S3StorageService> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
             
             // Получаем настройки из конфигурации
             _bucketName = configuration["AWS:S3:BucketName"] ?? throw new ArgumentNullException("AWS:S3:BucketName is not configured");
@@ -35,7 +38,6 @@ namespace FileConverter.Services
             };
             
             _s3Client = new AmazonS3Client(credentials, config);
-            _httpClient = new HttpClient();
         }
 
         public async Task<bool> FileExistsAsync(string url)
@@ -43,7 +45,8 @@ namespace FileConverter.Services
             try
             {
                 // Для внешних URL проверяем доступность через HEAD запрос
-                using var response = await _httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, url));
+                var httpClient = _httpClientFactory.CreateClient("default");
+                using var response = await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, url));
                 return response.IsSuccessStatusCode;
             }
             catch (Exception ex)
@@ -124,7 +127,8 @@ namespace FileConverter.Services
             try
             {
                 // Для внешних URL используем HttpClient
-                using var response = await _httpClient.GetAsync(url);
+                var httpClient = _httpClientFactory.CreateClient("default");
+                using var response = await httpClient.GetAsync(url);
                 response.EnsureSuccessStatusCode();
                 return await response.Content.ReadAsByteArrayAsync();
             }

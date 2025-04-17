@@ -124,13 +124,13 @@ public class VideoConverter : IVideoConverter
             }
             
             // Проверяем размер файла
-            if (!await _urlValidator.IsFileSizeValid(job.VideoUrl))
-            {
-                _logger.LogWarning($"File exceeds allowed size for task {jobId}: {job.VideoUrl}");
-                await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
-                    errorMessage: "File exceeds maximum allowed size");
-                return;
-            }
+            //if (!await _urlValidator.IsFileSizeValid(job.VideoUrl))
+            //{
+            //    _logger.LogWarning($"File exceeds allowed size for task {jobId}: {job.VideoUrl}");
+            //    await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
+            //        errorMessage: "File exceeds maximum allowed size");
+            //    return;
+            //}
 
             // Помещаем видео в очередь загрузки
             await _downloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
@@ -237,7 +237,7 @@ public class VideoConverter : IVideoConverter
                 }
                 
                 // Временный путь
-                videoPath = _tempFileManager.CreateTempFile(Path.GetExtension(videoUrl) ?? ".mp4");
+                videoPath = _tempFileManager.CreateTempFile( ".mp4");
                 
                 // Скачиваем видео
                 byte[] fileData;
@@ -475,7 +475,7 @@ public class VideoConverter : IVideoConverter
                 }
 
                 // Загружаем видео и MP3 в S3
-                var videoUploadTask = _storageService.UploadFileAsync(videoPath, job.ContentType ?? "video/mp4");
+                var videoUploadTask = _storageService.UploadFileAsync(videoPath, "video/mp4");
                 var mp3UploadTask = _storageService.UploadFileAsync(mp3Path, "audio/mpeg");
                 
                 await Task.WhenAll(videoUploadTask, mp3UploadTask);
@@ -490,15 +490,13 @@ public class VideoConverter : IVideoConverter
                     VideoHash = videoHash,
                     VideoUrl = videoUrl,
                     AudioUrl = mp3Url,
-                    FileSizeBytes = job.FileSizeBytes ?? 0,
-                    ContentType = job.ContentType ?? "video/mp4"
+                    FileSizeBytes = job.FileSizeBytes ?? 0
                 };
                 
                 var savedItem = await _mediaItemRepository.SaveItemAsync(mediaItem);
                 _logger.LogInformation($"Media item saved in C3 storage with ID: {savedItem.Id}");
                 
-                // Обновляем задачу с новым URL видео
-                await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Completed, mp3Url: mp3Url);
+                await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Completed, mp3Url: mp3Url, newVideoUrl: videoUrl);
                 
                 _logger.LogInformation($"Task {jobId} completed successfully");
             }

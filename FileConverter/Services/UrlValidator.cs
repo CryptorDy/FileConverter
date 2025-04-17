@@ -1,4 +1,12 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading.Tasks;
 
 namespace FileConverter.Services
 {
@@ -6,6 +14,7 @@ namespace FileConverter.Services
     {
         private readonly ILogger<UrlValidator> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IHttpClientFactory _httpClientFactory;
         
         // Maximum file size for download (default 500 MB)
         private readonly long _maxFileSize;
@@ -13,21 +22,25 @@ namespace FileConverter.Services
         // List of allowed content types from configuration
         private readonly HashSet<string> _allowedContentTypes;
 
-        public UrlValidator(ILogger<UrlValidator> logger, IConfiguration configuration)
+        public UrlValidator(ILogger<UrlValidator> logger, IConfiguration configuration, IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
             _configuration = configuration;
+            _httpClientFactory = httpClientFactory;
             
             // Loading maximum file size from configuration (in bytes)
-            _maxFileSize = long.TryParse(_configuration["FileConverter:MaxFileSizeBytes"], out long maxSize)
-                ? maxSize
-                : 500L * 1024 * 1024; // 500 MB default
+            _maxFileSize = _configuration.GetValue<long>("FileValidation:MaxFileSizeMB", 500) * 1024 * 1024;
             
             // Loading list of allowed content types from configuration
-            _allowedContentTypes = new HashSet<string>(
-                _configuration.GetSection("FileConverter:AllowedFileTypes").Get<string[]>() ?? 
-                new[] { "video/mp4", "video/webm", "audio/mpeg", "audio/mp4" }
-            );
+            _allowedContentTypes = new HashSet<string>(_configuration
+                .GetSection("FileValidation:AllowedContentTypes")
+                .Get<string[]>() ?? new string[] 
+                {
+                    "video/mp4", "video/quicktime", "video/x-msvideo", "video/x-ms-wmv",
+                    "video/webm", "video/x-flv", "video/3gpp", "video/mpeg",
+                    "audio/mpeg", "audio/mp3", "audio/ogg", "audio/wav", "audio/webm",
+                    "application/octet-stream"
+                });
                 
             _logger.LogInformation($"Initialized URL validator. " +
                                   $"Max file size: {_maxFileSize / (1024.0 * 1024):F2} MB, " +
@@ -93,7 +106,7 @@ namespace FileConverter.Services
         {
             try
             {
-                using var httpClient = new HttpClient();
+                using var httpClient = _httpClientFactory.CreateClient("default");
                 httpClient.DefaultRequestHeaders.Add("User-Agent", "FileConverter/1.0");
                 
                 // First make a HEAD request to check size
@@ -132,7 +145,7 @@ namespace FileConverter.Services
         {
             try
             {
-                using var httpClient = new HttpClient();
+                using var httpClient = _httpClientFactory.CreateClient("default");
                 httpClient.DefaultRequestHeaders.Add("User-Agent", "FileConverter/1.0");
                 
                 // Make a HEAD request to check content type

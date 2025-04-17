@@ -13,6 +13,8 @@ using Serilog;
 using System.Text;
 using Amazon.S3;
 using FileConverter.Services.Interfaces;
+using Microsoft.Extensions.Http;
+using Microsoft.Extensions.DependencyInjection;
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var encoding = Encoding.GetEncoding(1251);
@@ -52,7 +54,8 @@ builder.Services.AddHttpClient("video-downloader", client =>
 {
     client.Timeout = TimeSpan.FromMinutes(
         builder.Configuration.GetValue<int>("Performance:DownloadTimeoutMinutes", 30));
-});
+})
+.ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
 
 // Добавляем именованный HTTP клиент с прокси для Instagram
 builder.Services.AddHttpClient("instagram-downloader", client =>
@@ -70,6 +73,11 @@ builder.Services.AddHttpClient("instagram-downloader", client =>
     client.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
 })
 .ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
+
+// Настраиваем базовый HttpClient по умолчанию с поддержкой прокси
+builder.Services.AddHttpClient("default", client => { })
+    .ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
+builder.Services.AddHttpClient();
 
 // Конфигурация для высоких нагрузок
 builder.WebHost.ConfigureKestrel(options =>
@@ -169,7 +177,6 @@ builder.Services.AddScoped<IMediaItemRepository, MediaItemRepository>();
 builder.Services.AddScoped<IS3StorageService, S3StorageService>();
 builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
-builder.Services.AddHttpClient();
 
 // Кэширование и временные файлы
 builder.Services.AddSingleton<DistributedCacheManager>();

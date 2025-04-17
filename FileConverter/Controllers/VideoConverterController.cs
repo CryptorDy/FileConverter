@@ -84,12 +84,31 @@ namespace FileConverter.Controllers
         /// Получает статус всех задач в пакете
         /// </summary>
         [HttpGet("batch-status/{batchId}")]
-        public async Task<ActionResult<List<JobStatusResponse>>> GetBatchStatus(string batchId)
+        public async Task<ActionResult<BatchStatusResponse>> GetBatchStatus(string batchId)
         {
             try
             {
-                var statuses = await _jobManager.GetBatchStatus(batchId);
-                return Ok(statuses);
+                // Получаем статусы отдельных задач из менеджера
+                var jobStatuses = await _jobManager.GetBatchStatus(batchId);
+                
+                // Определяем общий статус пакета задач
+                BatchStatus batchStatus = DetermineBatchStatus(jobStatuses);
+                
+                // Вычисляем общий прогресс
+                double overallProgress = jobStatuses.Count > 0 
+                    ? jobStatuses.Average(job => job.Progress) 
+                    : 0;
+                
+                // Создаем ответ
+                var response = new BatchStatusResponse
+                {
+                    BatchId = batchId,
+                    Status = batchStatus,
+                    Jobs = jobStatuses,
+                    Progress = overallProgress
+                };
+                
+                return Ok(response);
             }
             catch (KeyNotFoundException)
             {
@@ -100,6 +119,36 @@ namespace FileConverter.Controllers
                 _logger.LogError(ex, $"Ошибка при получении статуса пакета задач {batchId}");
                 return StatusCode(500, "Произошла ошибка при получении статуса пакета задач");
             }
+        }
+        
+        /// <summary>
+        /// Определяет общий статус пакета задач на основе статусов отдельных задач
+        /// </summary>
+        private BatchStatus DetermineBatchStatus(List<JobStatusResponse> jobStatuses)
+        {
+            if (!jobStatuses.Any())
+            {
+                return BatchStatus.Pending;
+            }
+            
+            // Если все задачи завершились с ошибкой, то пакет Failed
+            if (jobStatuses.All(job => job.Status == ConversionStatus.Failed))
+            {
+                return BatchStatus.Failed;
+            }
+            
+            // Если есть хотя бы одна задача, не завершившая обработку, то пакет в статусе Pending
+            bool hasNonCompletedJob = jobStatuses.Any(job => 
+                job.Status != ConversionStatus.Completed && 
+                job.Status != ConversionStatus.Failed);
+                
+            if (hasNonCompletedJob)
+            {
+                return BatchStatus.Pending;
+            }
+            
+            // В остальных случаях (все задачи или завершены успешно, или с ошибкой) - Completed
+            return BatchStatus.Completed;
         }
         
         /// <summary>
