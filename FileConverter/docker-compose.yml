@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fileconverter
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Server=postgres;Port=5432;Database=fileconverter_db;User Id=postgres;Password=your_password;Include Error Detail=true
+      - ConnectionStrings__HangfireConnection=Server=postgres;Port=5432;Database=hangfire_db;User Id=postgres;Password=your_password;Include Error Detail=true
+    volumes:
+      - ./Logs:/app/Logs
+      - ./Temp:/app/Temp
+      - ./C3Storage:/app/C3Storage
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:15
+    container_name: fileconverter_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=your_password
+      - POSTGRES_MULTIPLE_DATABASES=fileconverter_db,hangfire_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
