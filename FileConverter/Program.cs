@@ -174,9 +174,12 @@ builder.Services.AddHangfireServer(options =>
 // Регистрируем репозиторий и сервисы
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<IMediaItemRepository, MediaItemRepository>();
+builder.Services.AddScoped<IConversionLogRepository, ConversionLogRepository>();
 builder.Services.AddScoped<IS3StorageService, S3StorageService>();
 builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
+builder.Services.AddScoped<IConversionLogger, ConversionLogger>();
+builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
 
 // Кэширование и временные файлы
 builder.Services.AddSingleton<DistributedCacheManager>();
@@ -367,6 +370,13 @@ app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks
 
 // Запускаем фоновые задачи
 TempFileCleanupJob.ScheduleJobs();
+
+// Настраиваем расписание для восстановления задач
+using (var scope = app.Services.CreateScope())
+{
+    var recoveryService = scope.ServiceProvider.GetRequiredService<IJobRecoveryService>();
+    recoveryService.ScheduleRecoveryJobs();
+}
 
 // Логируем запуск приложения
 Log.Information("FileConverter application started in {Environment} environment", 
