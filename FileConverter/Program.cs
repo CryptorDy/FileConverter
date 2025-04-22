@@ -90,8 +90,8 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(5);
 });
 
-// Явно указываем URL для прослушивания, чтобы избежать конфликта портов
-builder.WebHost.UseUrls("http://0.0.0.0:5039");
+// Явное указание URL закомментировано, чтобы использовалась переменная окружения ASPNETCORE_URLS
+// builder.WebHost.UseUrls("http://0.0.0.0:5039");
 
 // Настройка контекста базы данных
 builder.Services.AddDbContext<AppDbContext>(options =>
