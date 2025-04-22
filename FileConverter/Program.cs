@@ -91,7 +91,7 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 // Явное указание URL закомментировано, чтобы использовалась переменная окружения ASPNETCORE_URLS
-// builder.WebHost.UseUrls("http://0.0.0.0:5039");
+builder.WebHost.UseUrls("http://0.0.0.0:5080");
 
 // Настройка контекста базы данных
 builder.Services.AddDbContext<AppDbContext>(options =>
