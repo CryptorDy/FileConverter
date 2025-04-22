@@ -228,14 +228,14 @@ public class VideoConverter : IVideoConverter
                 {
                     _logger.LogError(statusEx, "Error updating task status {JobId} to Downloading. Continuing processing.", jobId);
                 }
-                
+
                 // Проверяем тип контента
-                var contentTypeResult = await _urlValidator.IsContentTypeValid(videoUrl);
-                if (!contentTypeResult.isValid)
-                {
-                    throw new InvalidOperationException($"Invalid content type: {contentTypeResult.contentType}. Only video files are allowed.");
-                }
-                
+                //var contentTypeResult = await _urlValidator.IsContentTypeValid(videoUrl);
+                //if (!contentTypeResult.isValid)
+                //{
+                //    throw new InvalidOperationException($"Invalid content type: {contentTypeResult.contentType}. Only video files are allowed.");
+                //}
+
                 // Временный путь
                 videoPath = _tempFileManager.CreateTempFile( ".mp4");
                 
@@ -252,11 +252,8 @@ public class VideoConverter : IVideoConverter
                 {
                     try
                     {
-                        // Выбираем правильный HTTP клиент в зависимости от URL
-                        var httpClient = IsInstagramUrl(videoUrl) ? _instagramHttpClient : _httpClient;
-                        
                         using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
-                        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                        using var response = await _instagramHttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
 
                         // Обрабатываем различные коды ошибок
                         if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
@@ -299,7 +296,6 @@ public class VideoConverter : IVideoConverter
                     if (job != null)
                     {
                         job.FileSizeBytes = fileData.Length;
-                        job.ContentType = contentTypeResult.contentType;
                         job.TempVideoPath = videoPath;
                         job.VideoHash = videoHash;
                         await _repository.UpdateJobAsync(job);
