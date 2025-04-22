@@ -1,11 +1,11 @@
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
 WORKDIR /app
-EXPOSE 80
+EXPOSE 5080
 EXPOSE 443
 
 # Установка FFmpeg
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg curl && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -30,11 +30,12 @@ RUN mkdir -p /app/Temp /app/Logs /app/wwwroot/mp3
 
 # Установка переменных среды
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENV ASPNETCORE_URLS=http://+:80
-ENV FFmpegPath=/usr/bin
+ENV ASPNETCORE_URLS=http://+:5080
 
-# Установка пользователя без привилегий
-RUN chown -R 1000:1000 /app
-USER 1000
+# Добавление пользователя для работы приложения
+RUN adduser --disabled-password --gecos "" appuser
+RUN chown -R appuser:appuser /app
+USER appuser
 
+# Явно указываем точку входа
 ENTRYPOINT ["dotnet", "FileConverter.dll"] 

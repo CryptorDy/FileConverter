@@ -3,60 +3,95 @@
 ## Предварительные требования
 
 - Docker
-- Docker Compose
 
 ## Запуск приложения
 
-1. Сделайте файл init-multiple-databases.sh исполняемым:
+1. Соберите Docker образ:
 
 ```bash
-chmod +x init-multiple-databases.sh
+docker build -t fileconverter .
 ```
 
-2. Запустите приложение с помощью Docker Compose:
+2. Запустите контейнер:
 
 ```bash
-docker-compose up -d
+docker run -d --name fileconverter -p 5080:5080 \
+  -e ASPNETCORE_ENVIRONMENT=Production \
+  -e ConnectionStrings__DefaultConnection="Server=ваш_сервер;Port=5432;Database=fileconverter_db;User Id=postgres;Password=ваш_пароль;Include Error Detail=true" \
+  -e ConnectionStrings__HangfireConnection="Server=ваш_сервер;Port=5432;Database=hangfire_db;User Id=postgres;Password=ваш_пароль;Include Error Detail=true" \
+  -v $(pwd)/Logs:/app/Logs \
+  -v $(pwd)/Temp:/app/Temp \
+  -v $(pwd)/C3Storage:/app/C3Storage \
+  fileconverter
 ```
 
-3. Приложение будет доступно по адресу: http://localhost:8080
+3. Приложение будет доступно по адресу: http://localhost:5080
 
 ## Настройка переменных окружения
 
-Перед запуском вы можете изменить следующие параметры в файле docker-compose.yml:
+Вы можете настроить следующие переменные окружения при запуске контейнера:
 
-- `POSTGRES_PASSWORD` - пароль пользователя postgres (по умолчанию: your_password)
 - `ConnectionStrings__DefaultConnection` - строка подключения к основной базе данных
 - `ConnectionStrings__HangfireConnection` - строка подключения к базе данных Hangfire
 
 ## Директории для данных
 
-- `./Logs` - директория для хранения логов
-- `./Temp` - директория для временных файлов
-- `./C3Storage` - директория для хранения контента
+Вы можете монтировать следующие директории:
 
-## Остановка приложения
+- `./Logs:/app/Logs` - директория для хранения логов
+- `./Temp:/app/Temp` - директория для временных файлов
+- `./C3Storage:/app/C3Storage` - директория для хранения контента
+
+## Управление контейнером
+
+- Остановка контейнера:
 
 ```bash
-docker-compose down
+docker stop fileconverter
 ```
 
-## Управление контейнерами
+- Удаление контейнера:
+
+```bash
+docker rm fileconverter
+```
 
 - Просмотр логов:
 
 ```bash
-docker-compose logs -f
+docker logs fileconverter
 ```
 
-- Перезапуск приложения:
+- Перезапуск контейнера:
 
 ```bash
-docker-compose restart app
+docker restart fileconverter
 ```
 
-## Резервное копирование базы данных
+## Диагностика проблем
 
+Если вы столкнулись с ошибкой 502 Bad Gateway, выполните следующие шаги:
+
+1. Проверьте логи контейнера:
 ```bash
-docker exec -t fileconverter_postgres pg_dump -U postgres fileconverter_db > backup_$(date +%Y-%m-%d_%H-%M-%S).sql
-``` 
+docker logs fileconverter
+```
+
+2. Проверьте доступность приложения внутри контейнера:
+```bash
+docker exec -it fileconverter curl http://localhost:5080/Health
+```
+
+3. Проверьте, запущен ли контейнер:
+```bash
+docker ps | grep fileconverter
+```
+
+4. Перезапустите контейнер:
+```bash
+docker restart fileconverter
+```
+
+5. Проверьте настройки NGINX, если он используется:
+   - Убедитесь, что NGINX настроен на проксирование запросов на порт 5080 контейнера
+   - Проверьте логи NGINX на наличие ошибок 
