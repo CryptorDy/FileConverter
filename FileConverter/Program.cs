@@ -1,9 +1,6 @@
 using FileConverter.Data;
 using FileConverter.Services;
 using FileConverter.Middleware;
-using Hangfire;
-using Hangfire.MemoryStorage;
-using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using System.Threading.RateLimiting;
@@ -13,8 +10,7 @@ using Serilog;
 using System.Text;
 using Amazon.S3;
 using FileConverter.Services.Interfaces;
-using Microsoft.Extensions.Http;
-using Microsoft.Extensions.DependencyInjection;
+using FileConverter.BackgroundServices;
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var encoding = Encoding.GetEncoding(1251);
@@ -133,43 +129,6 @@ builder.Services.AddMemoryCache(options =>
 // Настраиваем адаптер для совместимости с интерфейсом распределенного кэша
 builder.Services.AddSingleton<IDistributedCache, MemoryCacheAdapter>();
 
-// Регистрируем Hangfire для фоновых задач
-builder.Services.AddHangfire(config =>
-{
-    // Используем PostgreSQL для продакшна
-    if (builder.Environment.IsProduction())
-    {
-        var connectionString = builder.Configuration.GetConnectionString("HangfireConnection");
-        // Используем новую рекомендуемую перегрузку с Action<PostgreSqlBootstrapperOptions>
-        config.UsePostgreSqlStorage((Action<PostgreSqlBootstrapperOptions>)(options =>
-        {
-            options.UseNpgsqlConnection(connectionString);
-        }), new PostgreSqlStorageOptions
-        {
-            PrepareSchemaIfNecessary = true,
-            QueuePollInterval = TimeSpan.FromSeconds(15),
-            InvisibilityTimeout = TimeSpan.FromMinutes(5),
-            DistributedLockTimeout = TimeSpan.FromMinutes(5),
-            SchemaName = "public"
-        });
-    }
-    else
-    {
-        // В разработке используем in-memory storage
-        config.UseMemoryStorage();
-    }
-    
-    // Настройка обработки очередей
-    config.UseRecommendedSerializerSettings();
-});
-
-// Настраиваем сервер обработки Hangfire
-builder.Services.AddHangfireServer(options =>
-{
-    options.WorkerCount = Math.Max(Environment.ProcessorCount, 4); // Минимум 4 воркера
-    options.Queues = new[] { "critical", "default", "low" }; // Приоритеты очередей
-    options.ServerName = "VideoConverter";
-});
 
 // Регистрируем репозиторий и сервисы
 builder.Services.AddScoped<IJobRepository, JobRepository>();
@@ -180,11 +139,11 @@ builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
 builder.Services.AddScoped<IConversionLogger, ConversionLogger>();
 builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
+builder.Services.AddSingleton<ProcessingChannels>();
 
-// Кэширование и временные файлы
+// Кэширование, каналы и временные файлы
 builder.Services.AddSingleton<DistributedCacheManager>();
 builder.Services.AddSingleton<ITempFileManager, TempFileManager>();
-builder.Services.AddScoped<TempFileCleanupJob>();
 builder.Services.AddSingleton<UrlValidator>();
 
 // Метрики и мониторинг
@@ -288,6 +247,13 @@ builder.Services.AddCors(options =>
     }
 });
 
+// Регистрируем фоновые службы (Hosted Services)
+builder.Services.AddHostedService<DownloadBackgroundService>();
+builder.Services.AddHostedService<ConversionBackgroundService>();
+builder.Services.AddHostedService<UploadBackgroundService>();
+builder.Services.AddHostedService<JobRecoveryHostedService>();
+builder.Services.AddHostedService<TempFileCleanupHostedService>();
+
 var app = builder.Build();
 
 // Конфигурируем ServiceActivator для доступа к DI из статических методов
@@ -318,7 +284,7 @@ app.UseGlobalExceptionHandler();
 // Профилирование HTTP запросов
 app.UseRequestProfiling();
 
-// Ограничение скорости запросов
+// Используем Rate Limiter
 app.UseRateLimiter();
 
 // Configure the HTTP request pipeline.
@@ -326,14 +292,7 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
-    
-    // Добавляем панель управления Hangfire только в режиме разработки
-    app.UseHangfireDashboard("/hangfire", new DashboardOptions
-    {
-        DashboardTitle = "Video Conversion Dashboard",
-        DisplayStorageConnectionString = false,
-        IsReadOnlyFunc = (context) => false
-    });
+
 }
 
 app.UseHttpsRedirection();
@@ -344,7 +303,6 @@ app.UseCors("SecureCorsPolicy"); // Используем безопасную CO
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHangfireDashboard();
 
 // Добавляем эндпоинт для проверки статуса
 app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
@@ -367,16 +325,6 @@ app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks
         await context.Response.WriteAsJsonAsync(result);
     }
 });
-
-// Запускаем фоновые задачи
-TempFileCleanupJob.ScheduleJobs();
-
-// Настраиваем расписание для восстановления задач
-using (var scope = app.Services.CreateScope())
-{
-    var recoveryService = scope.ServiceProvider.GetRequiredService<IJobRecoveryService>();
-    recoveryService.ScheduleRecoveryJobs();
-}
 
 // Логируем запуск приложения
 Log.Information("FileConverter application started in {Environment} environment", 

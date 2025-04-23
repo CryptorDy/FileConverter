@@ -210,5 +210,20 @@ namespace FileConverter.Data
                     .ToListAsync();
             });
         }
+        
+        /// <summary>
+        /// Получает количество заданий с указанными статусами
+        /// </summary>
+        /// <param name="statuses">Список статусов для подсчета</param>
+        /// <returns>Количество заданий</returns>
+        public async Task<int> GetJobsByStatusesCountAsync(ConversionStatus[] statuses)
+        {
+            return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                return await dbContext.ConversionJobs
+                    .Where(j => statuses.Contains(j.Status))
+                    .CountAsync();
+            });
+        }
     }
 } 

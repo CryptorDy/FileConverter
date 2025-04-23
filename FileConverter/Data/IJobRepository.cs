@@ -33,5 +33,12 @@ namespace FileConverter.Data
         /// Получает список заданий, которые были в процессе, но не обновлялись дольше указанного времени
         /// </summary>
         Task<List<ConversionJob>> GetStaleJobsAsync(TimeSpan maxAge);
+        
+        /// <summary>
+        /// Получает количество заданий с указанными статусами
+        /// </summary>
+        /// <param name="statuses">Список статусов для подсчета</param>
+        /// <returns>Количество заданий</returns>
+        Task<int> GetJobsByStatusesCountAsync(ConversionStatus[] statuses);
     }
 } 

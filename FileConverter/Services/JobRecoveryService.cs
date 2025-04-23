@@ -1,18 +1,25 @@
 using FileConverter.Data;
 using FileConverter.Models;
 using FileConverter.Services.Interfaces;
-using Hangfire;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Threading.Channels;
+using FileConverter.Services;
 
 namespace FileConverter.Services
 {
     /// <summary>
-    /// Сервис для восстановления "застрявших" заданий
+    /// Сервис для восстановления "застрявших" заданий.
+    /// Теперь добавляет восстановленные задачи напрямую в канал обработки.
     /// </summary>
     public class JobRecoveryService : IJobRecoveryService
     {
         private readonly IJobRepository _jobRepository;
         private readonly IConversionLogRepository _logRepository;
-        private readonly IBackgroundJobClient _backgroundJobClient;
+        private readonly ProcessingChannels _channels;
         private readonly ILogger<JobRecoveryService> _logger;
         private readonly IConversionLogger _conversionLogger;
         private readonly IConfiguration _configuration;
@@ -27,14 +34,14 @@ namespace FileConverter.Services
         public JobRecoveryService(
             IJobRepository jobRepository,
             IConversionLogRepository logRepository,
-            IBackgroundJobClient backgroundJobClient,
+            ProcessingChannels channels,
             ILogger<JobRecoveryService> logger,
             IConversionLogger conversionLogger,
             IConfiguration configuration)
         {
             _jobRepository = jobRepository;
             _logRepository = logRepository;
-            _backgroundJobClient = backgroundJobClient;
+            _channels = channels;
             _logger = logger;
             _conversionLogger = conversionLogger;
             _configuration = configuration;
@@ -42,52 +49,38 @@ namespace FileConverter.Services
             // Загружаем настройки
             _staleJobThresholdMinutes = _configuration.GetValue<int>("Performance:StaleJobThresholdMinutes", 30);
             _maxAttempts = _configuration.GetValue<int>("Performance:JobRetryLimit", 3);
-        }
-        
-        /// <inheritdoc/>
-        public void ScheduleRecoveryJobs()
-        {
-            // Расписание для восстановления зависших заданий - каждые 10 минут
-            RecurringJob.AddOrUpdate<IJobRecoveryService>(
-                "recover-stale-jobs",
-                service => service.RecoverStaleJobsAsync(),
-                "*/10 * * * *");
-            
-            // Расписание для очистки старых логов - раз в день в 3:00
-            RecurringJob.AddOrUpdate<IJobRecoveryService>(
-                "cleanup-old-logs",
-                service => service.CleanupOldLogsAsync(30),
-                "0 3 * * *");
-            
-            _logger.LogInformation("Scheduled job recovery and log cleanup tasks");
+            _logger.LogInformation("JobRecoveryService инициализирован (v2 - Channels). Порог зависания: {StaleMinutes} мин, Лимит попыток: {MaxAttempts}", 
+                _staleJobThresholdMinutes, _maxAttempts);
         }
         
         /// <inheritdoc/>
         public async Task<int> RecoverStaleJobsAsync()
         {
+            int recoveredCount = 0;
             try
             {
-                _logger.LogInformation("Starting recovery of stale jobs...");
+                _logger.LogInformation("Запуск процесса восстановления зависших заданий...");
                 
-                // Получаем все "застрявшие" задания
-                var staleJobs = await _jobRepository.GetStaleJobsAsync(TimeSpan.FromMinutes(_staleJobThresholdMinutes));
+                var recoveryTimeSpan = TimeSpan.FromMinutes(_staleJobThresholdMinutes);
+                var staleJobs = await _jobRepository.GetStaleJobsAsync(recoveryTimeSpan);
                 
                 if (!staleJobs.Any())
                 {
-                    _logger.LogInformation("No stale jobs found");
+                    _logger.LogInformation("Зависшие задания (дольше {Minutes} мин) не найдены.", _staleJobThresholdMinutes);
                     return 0;
                 }
                 
-                _logger.LogWarning("Found {Count} stale jobs", staleJobs.Count);
+                _logger.LogWarning("Найдено {Count} зависших заданий (не обновлялись дольше {Minutes} мин).", 
+                    staleJobs.Count, _staleJobThresholdMinutes);
                 
-                int recoveredCount = 0;
-                
-                // Обрабатываем каждое "застрявшее" задание
                 foreach (var job in staleJobs)
                 {
+                     _logger.LogWarning("Попытка восстановления зависшей задачи {JobId} из статуса {Status} (Попытка {Attempt}/{MaxAttempts})", 
+                        job.Id, job.Status, job.ProcessingAttempts + 1, _maxAttempts);
                     try
                     {
-                        bool recovered = await RecoverJobAsync(job);
+                        // Используем переименованный метод RecoverSingleJobAsync
+                        bool recovered = await RecoverSingleJobAsync(job);
                         if (recovered)
                         {
                             recoveredCount++;
@@ -95,64 +88,93 @@ namespace FileConverter.Services
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Error recovering job {JobId}: {Message}", job.Id, ex.Message);
+                        _logger.LogError(ex, "Ошибка при восстановлении задачи {JobId}: {Message}", job.Id, ex.Message);
+                         await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка восстановления: {ex.Message}", ex.StackTrace, job.Status);
                     }
                 }
-                
-                await _conversionLogger.LogSystemInfoAsync(
-                    $"Восстановлено {recoveredCount} из {staleJobs.Count} застрявших заданий");
-                
-                return recoveredCount;
+                 
+                if(recoveredCount > 0) 
+                {
+                    await _conversionLogger.LogSystemInfoAsync(
+                        $"Восстановлено {recoveredCount} из {staleJobs.Count} зависших заданий.");
+                     _logger.LogInformation("Восстановлено {RecoveredCount} зависших заданий.", recoveredCount);
+                }
+                 else 
+                 {
+                     _logger.LogInformation("Не удалось восстановить ни одно из {StaleJobsCount} зависших заданий (возможно, все достигли лимита попыток).", staleJobs.Count);
+                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in RecoverStaleJobsAsync: {Message}", ex.Message);
-                return 0;
+                _logger.LogError(ex, "Ошибка в процессе восстановления зависших заданий: {Message}", ex.Message);
+                await _conversionLogger.LogSystemInfoAsync($"Критическая ошибка сервиса восстановления: {ex.Message}");
             }
+            return recoveredCount;
         }
         
         /// <summary>
-        /// Восстанавливает конкретное "застрявшее" задание
+        /// Восстанавливает конкретное "застрявшее" задание: проверяет лимит попыток,
+        /// сбрасывает статус на Pending и добавляет в очередь обработки.
         /// </summary>
         /// <param name="job">Задание для восстановления</param>
-        /// <returns>true, если задание успешно восстановлено</returns>
-        private async Task<bool> RecoverJobAsync(ConversionJob job)
+        /// <returns>true, если задание успешно поставлено в очередь на повторную обработку или отмечено как Failed</returns>
+        // Переименовано из RecoverJobAsync
+        private async Task<bool> RecoverSingleJobAsync(ConversionJob job)
         {
+            var previousStatus = job.Status; // Запоминаем предыдущий статус для логов
+
             // Если превышено количество попыток - отмечаем как Failed
             if (job.ProcessingAttempts >= _maxAttempts)
             {
+                 _logger.LogWarning("Задача {JobId}: Превышено максимальное количество попыток ({MaxAttempts}). Задача будет отмечена как Failed.", job.Id, _maxAttempts);
                 await _conversionLogger.LogJobCancelledAsync(job.Id, 
-                    $"Превышено максимальное количество попыток ({_maxAttempts})");
+                    $"Превышено максимальное количество попыток ({_maxAttempts}) при восстановлении");
                 
+                 // Обновляем статус через репозиторий
                 job.Status = ConversionStatus.Failed;
-                job.ErrorMessage = $"Превышено максимальное количество попыток ({_maxAttempts})";
+                job.ErrorMessage = $"Превышено максимальное количество попыток ({_maxAttempts}) при восстановлении";
                 job.CompletedAt = DateTime.UtcNow;
-                
+                job.LastAttemptAt = DateTime.UtcNow; // Обновим время последней попытки
                 await _jobRepository.UpdateJobAsync(job);
-                return true;
+                
+                return true; // Считаем успешным восстановлением (перевод в Failed)
             }
-            
-            // В зависимости от статуса восстанавливаем задание
-            var previousStatus = job.Status;
-            var reason = $"Задание не обновлялось более {_staleJobThresholdMinutes} минут в статусе {job.Status}";
             
             // Сбрасываем статус до Pending для повторного запуска
             job.Status = ConversionStatus.Pending;
             job.ProcessingAttempts++; // Увеличиваем счетчик попыток
+            job.LastAttemptAt = DateTime.UtcNow; // Обновляем время попытки
+            job.ErrorMessage = null; // Очищаем предыдущую ошибку, если была
             
-            await _jobRepository.UpdateJobAsync(job);
+            await _jobRepository.UpdateJobAsync(job); // Сохраняем изменения (Pending, Attempts, LastAttempt)
             
+             _logger.LogInformation("Задача {JobId}: Статус сброшен на Pending (Попытка {Attempt}/{MaxAttempts}).", job.Id, job.ProcessingAttempts, _maxAttempts);
+
             // Логируем восстановление задания
+            var reason = $"Задание не обновлялось более {_staleJobThresholdMinutes} минут в статусе {previousStatus}";
             await _conversionLogger.LogJobRecoveredAsync(
                 job.Id, previousStatus, job.Status, reason);
             
-            // Повторно запускаем обработку через Hangfire
-            _backgroundJobClient.Enqueue<IVideoConverter>(p => p.ProcessVideo(job.Id));
-            
-            _logger.LogWarning("Recovered job {JobId} from {PreviousStatus} to {NewStatus}, attempt {Attempt}/{MaxAttempts}", 
-                job.Id, previousStatus, job.Status, job.ProcessingAttempts, _maxAttempts);
-                
-            return true;
+            // Повторно запускаем обработку НЕ через Hangfire, а добавляем в канал
+            try
+            {
+                await _channels.DownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
+                _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь скачивания.", job.Id);
+                await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь скачивания.");
+                return true; // Успешно добавлено в очередь
+            }
+            catch(ChannelClosedException chEx)
+            {
+                 _logger.LogError(chEx, "Не удалось записать восстановленную задачу {JobId} в очередь скачивания (канал закрыт).", job.Id);
+                 await _conversionLogger.LogErrorAsync(job.Id, "Не удалось записать восстановленную задачу в очередь скачивания (канал закрыт).", chEx.StackTrace, ConversionStatus.Pending);
+                 return false; 
+            }
+            catch (Exception writeEx)
+            {
+                _logger.LogError(writeEx, "Не удалось записать восстановленную задачу {JobId} в очередь скачивания.", job.Id);
+                await _conversionLogger.LogErrorAsync(job.Id, "Не удалось записать восстановленную задачу в очередь скачивания после сброса статуса.", writeEx.StackTrace, ConversionStatus.Pending);
+                return false; // Не удалось добавить в очередь
+            }
         }
         
         /// <inheritdoc/>

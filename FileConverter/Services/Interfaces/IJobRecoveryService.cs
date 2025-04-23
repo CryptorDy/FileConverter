@@ -1,3 +1,6 @@
+using System.Threading.Tasks;
+using FileConverter.Data; // Добавлено для QueueStatistics
+
 namespace FileConverter.Services.Interfaces
 {
     /// <summary>
@@ -10,11 +13,6 @@ namespace FileConverter.Services.Interfaces
         /// </summary>
         /// <returns>Количество обработанных заданий</returns>
         Task<int> RecoverStaleJobsAsync();
-        
-        /// <summary>
-        /// Настраивает расписание регулярного запуска восстановления заданий
-        /// </summary>
-        void ScheduleRecoveryJobs();
         
         /// <summary>
         /// Запускает процесс очистки устаревших логов
