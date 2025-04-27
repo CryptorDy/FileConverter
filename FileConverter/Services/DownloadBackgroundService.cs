@@ -164,6 +164,39 @@ namespace FileConverter.Services
                             string videoHash = VideoHasher.GetHash(fileData);
                             logger.LogInformation("Задача {JobId}: хеш видео {VideoHash}", jobId, videoHash);
 
+                            // Проверяем наличие готового MP3 в репозитории по хешу видео
+                            var mediaItemRepository = scope.ServiceProvider.GetRequiredService<IMediaItemRepository>();
+                            var existingItem = await mediaItemRepository.FindByVideoHashAsync(videoHash);
+                            // Если есть, то обновляем задачи
+                            if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
+                            {
+                                logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}", jobId, videoHash, existingItem.AudioUrl);
+                                await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
+
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed,
+                                    mp3Url: existingItem.AudioUrl, newVideoUrl: existingItem.VideoUrl);
+
+                                job = await jobRepository.GetJobByIdAsync(jobId); // Перечитываем задачу, т.к. она могла измениться
+                                if (job != null)
+                                {
+                                    job.FileSizeBytes = fileData.Length;
+                                    job.Status = ConversionStatus.Completed;
+                                    job.Mp3Url = existingItem.AudioUrl;
+                                    job.VideoUrl = videoUrl;
+                                    job.NewVideoUrl = existingItem.VideoUrl;
+                                    job.VideoHash = videoHash;
+                                    job.LastAttemptAt = DateTime.UtcNow;
+                                    await jobRepository.UpdateJobAsync(job);
+                                    logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
+                                }
+
+                                var totalTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds; // Время от создания задачи
+                                await conversionLogger.LogJobCompletedAsync(jobId, existingItem.AudioUrl, totalTimeMs);
+                                // ВАЖНО: Удаляем временный видеофайл, так как он больше не нужен
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                                continue; // Переходим к следующей задаче
+                            }
+
                             // Обновляем задачу в БД
                             try
                             {
@@ -182,22 +215,6 @@ namespace FileConverter.Services
                             {
                                 await conversionLogger.LogErrorAsync(jobId, $"Ошибка обновления информации о файле: {updateEx.Message}", updateEx.StackTrace);
                                 logger.LogError(updateEx, "Задача {JobId}: Ошибка обновления информации о файле в БД", jobId);
-                            }
-
-                            // Проверяем наличие готового MP3 в репозитории по хешу видео
-                             var mediaItemRepository = scope.ServiceProvider.GetRequiredService<IMediaItemRepository>();
-                            var existingItem = await mediaItemRepository.FindByVideoHashAsync(videoHash);
-                            if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
-                            {
-                                logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}", jobId, videoHash, existingItem.AudioUrl);
-                                await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
-                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
-                                    mp3Url: existingItem.AudioUrl, newVideoUrl: existingItem.VideoUrl);
-                                var totalTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds; // Время от создания задачи
-                                await conversionLogger.LogJobCompletedAsync(jobId, existingItem.AudioUrl, totalTimeMs);
-                                // ВАЖНО: Удаляем временный видеофайл, так как он больше не нужен
-                                CleanupFile(tempFileManager, videoPath, logger, jobId); 
-                                continue; // Переходим к следующей задаче
                             }
 
                             // Помещаем задачу в очередь конвертации
