@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
 
 namespace FileConverter.Services
 {
@@ -173,10 +174,7 @@ namespace FileConverter.Services
                                 logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}", jobId, videoHash, existingItem.AudioUrl);
                                 await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
 
-                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed,
-                                    mp3Url: existingItem.AudioUrl, newVideoUrl: existingItem.VideoUrl);
-
-                                job = await jobRepository.GetJobByIdAsync(jobId); // Перечитываем задачу, т.к. она могла измениться
+                                job = await jobRepository.GetJobByIdAsync(jobId);
                                 if (job != null)
                                 {
                                     job.FileSizeBytes = fileData.Length;
@@ -187,7 +185,11 @@ namespace FileConverter.Services
                                     job.VideoHash = videoHash;
                                     job.LastAttemptAt = DateTime.UtcNow;
                                     await jobRepository.UpdateJobAsync(job);
+                                    logger.LogInformation($"------ " + JsonConvert.SerializeObject(job));
                                     logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
+                                } else
+                                {
+                                    logger.LogDebug("Задача {JobId}: не найдена в БД.", jobId);
                                 }
 
                                 var totalTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds; // Время от создания задачи
