@@ -28,6 +28,9 @@ COPY --from=publish /app/publish .
 # Создание директорий для временных файлов и логов
 RUN mkdir -p /app/Temp /app/Logs /app/wwwroot/mp3
 
+# Создаем директорию для временных файлов и устанавливаем права
+RUN mkdir -p /tmp/FileConverter/Temp && chmod -R 777 /tmp/FileConverter
+
 # Установка переменных среды
 ENV ASPNETCORE_ENVIRONMENT=Production
 ENV ASPNETCORE_URLS=http://+:5080
