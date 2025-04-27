@@ -103,10 +103,6 @@ namespace FileConverter.Services
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Downloading);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Downloading);
 
-                            // Создаем временный файл
-                            videoPath = tempFileManager.CreateTempFile(".mp4");
-                            logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
-
                             // Скачиваем видео
                             byte[] fileData;
                             string sourceDescription;
@@ -155,6 +151,10 @@ namespace FileConverter.Services
                                     throw; // Повторно выбрасываем исключение для корректной обработки отмены
                                 }
                             }
+
+                            // Создаем временный файл
+                            videoPath = tempFileManager.CreateTempFile(".mp4");
+                            logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
 
                             await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
                             logger.LogInformation("Задача {JobId}: видео сохранено во временный файл {VideoPath}", jobId, videoPath);
