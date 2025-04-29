@@ -341,7 +341,7 @@ public class ProxyHttpClientHandler : HttpClientHandler
             // Если текущий прокси был помечен как недоступный и заменен на другой, повторяем запрос
             if (this.UseProxy && this.Proxy != null)
             {
-                _logger.LogInformation("Retrying request with new proxy: {Address}", this.Proxy.Address);
+                _logger.LogInformation("Retrying request with new proxy");
                 return await base.SendAsync(request, cancellationToken);
             }
             
