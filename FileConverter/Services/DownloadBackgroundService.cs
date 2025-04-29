@@ -121,12 +121,9 @@ namespace FileConverter.Services
                                 logger.LogInformation("Задача {JobId}: скачивание из {SourceDescription}: {VideoUrl}", jobId, sourceDescription, videoUrl);
                                 try
                                 {
-                                    // Используем соответствующий HttpClient
-                                    HttpClient clientToUse = IsInstagramUrl(videoUrl) ? instagramHttpClient : httpClientFactory.CreateClient("video-downloader");
-
                                     using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
                                     // Используем CancellationToken для возможности отмены запроса
-                                    using var response = await clientToUse.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
+                                    using var response = await instagramHttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
 
                                     if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
                                         throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямое скачивание: {videoUrl}");
