@@ -477,11 +477,11 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             _logger.LogWarning("Ошибка при проверке прокси {Proxy}: {Message}", proxyInfo, ex.Message);
             
             // Обновляем состояние прокси при ошибке
-            if (_proxyStates.TryGetValue(key, out var state))
+            if (_proxyStates.TryGetValue(key, out var state2))
             {
-                bool wasAvailable = state.IsAvailable;
-                state.IsAvailable = false;
-                state.LastChecked = DateTime.UtcNow;
+                bool wasAvailable = state2.IsAvailable;
+                state2.IsAvailable = false;
+                state2.LastChecked = DateTime.UtcNow;
                 
                 if (wasAvailable)
                 {
