@@ -9,6 +9,9 @@ using System.Linq;
 using System.Timers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using System.Text;
+using System.Net.Sockets;
+using System.IO;
 
 namespace FileConverter.Services;
 
@@ -35,8 +38,17 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
     // Период в минутах для автоматической проверки прокси
     private const int CHECK_PERIOD_MINUTES = 10;
     
+    // Количество успешных запросов, после которого произойдет переключение на следующий прокси
+    private const int ROTATE_AFTER_REQUESTS = 50;
+    
+    // Счетчик успешных запросов для текущего прокси
+    private int _currentProxySuccessCount = 0;
+    
     // Счетчик запросов
     private int _requestCounter = 0;
+    
+    // Статистика использования прокси
+    private readonly ConcurrentDictionary<string, ProxyStats> _proxyStats = new ConcurrentDictionary<string, ProxyStats>();
     
     // Семафор для синхронизации доступа к вычислению текущего прокси
     private readonly SemaphoreSlim _proxySemaphore = new SemaphoreSlim(1, 1);
@@ -48,6 +60,8 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
     {
         _logger = logger;
         _configuration = configuration;
+        
+        _logger.LogInformation("Инициализация ProxyHttpClientHandler...");
         
         // Загружаем прокси из конфигурации
         LoadProxiesFromConfiguration();
@@ -75,6 +89,7 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         _proxyCheckTimer.Start();
         
         _logger.LogInformation("ProxyHttpClientHandler инициализирован, таймер проверки прокси запущен с интервалом {Minutes} минут", CHECK_PERIOD_MINUTES);
+        _logger.LogInformation("Ротация прокси: каждые {Count} успешных запросов", ROTATE_AFTER_REQUESTS);
     }
     
     /// <summary>
@@ -100,17 +115,43 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             var status = state.IsAvailable ? "Доступен" : "Недоступен";
             var current = kvp.Key == currentKey ? " (Текущий)" : "";
             
+            // Получаем статистику использования
+            string statsInfo = "";
+            if (_proxyStats.TryGetValue(kvp.Key, out var stats))
+            {
+                statsInfo = $", Запросов: {stats.RequestCount}, Успешных: {stats.SuccessCount}, Ошибок: {stats.ErrorCount}, Байт: {FormatBytes(stats.BytesTransferred)}";
+            }
+            
             _logger.LogInformation(
-                "Прокси {Host}:{Port} - {Status}{Current}, Ошибок: {ErrorCount}, Последняя проверка: {LastChecked}",
+                "Прокси {Host}:{Port} - {Status}{Current}, Ошибок: {ErrorCount}, Последняя проверка: {LastChecked}{Stats}",
                 state.Host, 
                 state.Port, 
                 status, 
                 current, 
                 state.ErrorCount, 
-                state.LastChecked.ToString("yyyy-MM-dd HH:mm:ss"));
+                state.LastChecked.ToString("yyyy-MM-dd HH:mm:ss"),
+                statsInfo);
         }
         
         _logger.LogInformation("===============================");
+    }
+    
+    /// <summary>
+    /// Форматирует байты в удобочитаемый вид
+    /// </summary>
+    private string FormatBytes(long bytes)
+    {
+        string[] suffixes = { "B", "KB", "MB", "GB", "TB" };
+        int counter = 0;
+        decimal number = bytes;
+        
+        while (Math.Round(number / 1024) >= 1)
+        {
+            number = number / 1024;
+            counter++;
+        }
+        
+        return $"{number:n1} {suffixes[counter]}";
     }
     
     /// <summary>
@@ -296,6 +337,9 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             
             if (_currentProxy != null)
             {
+                // Сбрасываем счетчик успешных запросов для нового прокси
+                _currentProxySuccessCount = 0;
+                
                 var key = GetProxyKey(_currentProxy);
                 string proxyInfo = "";
                 
@@ -534,15 +578,67 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         }
     }
     
+    /// <summary>
+    /// Обновляет статистику использования прокси
+    /// </summary>
+    private void UpdateProxyStats(WebProxy proxy, bool success, long bytes)
+    {
+        if (proxy == null) return;
+        
+        var key = GetProxyKey(proxy);
+        
+        var stats = _proxyStats.GetOrAdd(key, _ => new ProxyStats());
+        
+        stats.RequestCount++;
+        if (success)
+        {
+            stats.SuccessCount++;
+            stats.BytesTransferred += bytes;
+        }
+        else
+        {
+            stats.ErrorCount++;
+        }
+    }
+    
+    /// <summary>
+    /// Проверяет, нужно ли ротировать прокси
+    /// </summary>
+    private async Task CheckProxyRotation()
+    {
+        if (_currentProxy == null || _currentProxySuccessCount < ROTATE_AFTER_REQUESTS)
+            return;
+        
+        await _proxySemaphore.WaitAsync();
+        try
+        {
+            // Проверяем еще раз под блокировкой
+            if (_currentProxySuccessCount >= ROTATE_AFTER_REQUESTS)
+            {
+                var key = GetProxyKey(_currentProxy);
+                _logger.LogInformation("Ротация прокси: {Key} использован для {Count} успешных запросов, переключаемся на следующий", 
+                    key, _currentProxySuccessCount);
+                
+                UpdateCurrentProxy();
+            }
+        }
+        finally
+        {
+            _proxySemaphore.Release();
+        }
+    }
+    
     // Переопределяем метод отправки для автоматического переключения прокси при ошибках
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         int requestId = Interlocked.Increment(ref _requestCounter);
         var url = request.RequestUri?.ToString() ?? "неизвестный URL";
         string currentProxyInfo = "прямое соединение";
+        WebProxy? requestProxy = null;
         
         if (this.UseProxy && _currentProxy != null)
         {
+            requestProxy = _currentProxy;
             var key = GetProxyKey(_currentProxy);
             if (_proxyStates.TryGetValue(key, out var state))
             {
@@ -558,44 +654,56 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         
         try
         {
+            await CheckProxyRotation();
+            
             var startTime = DateTime.Now;
             var response = await base.SendAsync(request, cancellationToken);
             var elapsed = DateTime.Now - startTime;
             
-            _logger.LogDebug("Запрос #{RequestId}: {StatusCode} получен за {Elapsed}мс через {Proxy}", 
-                requestId, (int)response.StatusCode, elapsed.TotalMilliseconds, currentProxyInfo);
+            // Приблизительно оцениваем размер переданных данных
+            long estimatedBytes = 0;
+            if (response.Content != null)
+            {
+                if (response.Content.Headers.ContentLength.HasValue)
+                {
+                    estimatedBytes = response.Content.Headers.ContentLength.Value;
+                }
+            }
+            
+            // Увеличиваем счетчик успешных запросов
+            if (requestProxy != null)
+            {
+                Interlocked.Increment(ref _currentProxySuccessCount);
+                UpdateProxyStats(requestProxy, true, estimatedBytes);
+            }
+            
+            _logger.LogDebug("Запрос #{RequestId}: {StatusCode} получен за {Elapsed}мс через {Proxy}, размер: {Size}", 
+                requestId, (int)response.StatusCode, elapsed.TotalMilliseconds, currentProxyInfo, 
+                FormatBytes(estimatedBytes));
             
             return response;
         }
-        catch (HttpRequestException ex) when (ex.InnerException is WebException webEx && 
-                                          (webEx.Status == WebExceptionStatus.NameResolutionFailure ||
-                                           webEx.Status == WebExceptionStatus.ConnectFailure ||
-                                           webEx.Status == WebExceptionStatus.ProxyNameResolutionFailure ||
-                                           webEx.Status == WebExceptionStatus.ConnectionClosed))
+        // Ошибки прокси
+        catch (HttpRequestException ex) when (IsProxyException(ex))
         {
-            // Скорее всего проблема с прокси
-            _logger.LogWarning("Запрос #{RequestId}: Ошибка соединения с прокси {Proxy}. Статус: {Status}. Переключаем на другой прокси.", 
-                requestId, currentProxyInfo, webEx.Status);
+            string errorDetails = GetDetailedErrorMessage(ex);
+            
+            _logger.LogWarning("Запрос #{RequestId}: Ошибка прокси {Proxy}. Ошибка: {Error}. Переключаем на другой прокси.", 
+                requestId, currentProxyInfo, errorDetails);
+            
+            // Обновляем статистику
+            if (requestProxy != null)
+            {
+                UpdateProxyStats(requestProxy, false, 0);
+            }
             
             // Помечаем текущий прокси как проблемный
             await MarkCurrentProxyAsFailed();
             
             // Если текущий прокси был помечен как недоступный и заменен на другой, повторяем запрос
-            if (this.UseProxy && this.Proxy != null)
+            if (this.UseProxy && this.Proxy != null && _currentProxy != null)
             {
-                string newProxyInfo = "прямое соединение";
-                if (_currentProxy != null)
-                {
-                    var key = GetProxyKey(_currentProxy);
-                    if (_proxyStates.TryGetValue(key, out var state))
-                    {
-                        newProxyInfo = $"{state.Host}:{state.Port}";
-                    }
-                    else
-                    {
-                        newProxyInfo = _currentProxy.Address?.ToString() ?? "неизвестный прокси";
-                    }
-                }
+                string newProxyInfo = GetProxyDisplayName(_currentProxy);
                 
                 _logger.LogInformation("Запрос #{RequestId}: Повторная попытка через новый прокси {NewProxy}", requestId, newProxyInfo);
                 return await base.SendAsync(request, cancellationToken);
@@ -605,11 +713,170 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             _logger.LogError("Запрос #{RequestId}: Нет доступных прокси. Запрос не выполнен.", requestId);
             throw;
         }
-        catch (Exception ex)
+        // Таймауты и отмены
+        catch (TaskCanceledException ex) 
         {
-            _logger.LogError(ex, "Запрос #{RequestId}: Необработанная ошибка при выполнении запроса через {Proxy}", requestId, currentProxyInfo);
+            _logger.LogWarning("Запрос #{RequestId}: Таймаут запроса через {Proxy}. Сообщение: {Message}. Переключаем на другой прокси.", 
+                requestId, currentProxyInfo, ex.Message);
+            
+            // Обновляем статистику
+            if (requestProxy != null)
+            {
+                UpdateProxyStats(requestProxy, false, 0);
+            }
+            
+            // Помечаем текущий прокси как проблемный
+            await MarkCurrentProxyAsFailed();
+            
+            // Если текущий прокси был помечен как недоступный и заменен на другой, повторяем запрос
+            if (this.UseProxy && this.Proxy != null && _currentProxy != null && !cancellationToken.IsCancellationRequested)
+            {
+                string newProxyInfo = GetProxyDisplayName(_currentProxy);
+                
+                _logger.LogInformation("Запрос #{RequestId}: Повторная попытка через новый прокси {NewProxy} после таймаута", 
+                    requestId, newProxyInfo);
+                    
+                try {
+                    return await base.SendAsync(request, cancellationToken);
+                }
+                catch (Exception retryEx)
+                {
+                    _logger.LogError(retryEx, "Запрос #{RequestId}: Ошибка при повторной попытке: {Error}", 
+                        requestId, retryEx.Message);
+                    throw;
+                }
+            }
+            
+            _logger.LogError("Запрос #{RequestId}: Таймаут. Запрос не выполнен через {Proxy}.", requestId, currentProxyInfo);
             throw;
         }
+        // Другие ошибки
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Запрос #{RequestId}: Необработанная ошибка при выполнении запроса через {Proxy}", 
+                requestId, currentProxyInfo);
+                
+            // Обновляем статистику
+            if (requestProxy != null)
+            {
+                UpdateProxyStats(requestProxy, false, 0);
+            }
+            
+            // Для некоторых исключений также имеет смысл переключить прокси
+            if (ShouldSwitchProxyForException(ex))
+            {
+                _logger.LogWarning("Запрос #{RequestId}: Переключаем прокси из-за ошибки: {Error}", 
+                    requestId, ex.Message);
+                    
+                await MarkCurrentProxyAsFailed();
+            }
+            
+            throw;
+        }
+    }
+    
+    /// <summary>
+    /// Получает удобное для отображения имя прокси
+    /// </summary>
+    private string GetProxyDisplayName(WebProxy proxy)
+    {
+        if (proxy == null)
+            return "прямое соединение";
+            
+        var key = GetProxyKey(proxy);
+        if (_proxyStates.TryGetValue(key, out var state))
+        {
+            return $"{state.Host}:{state.Port}";
+        }
+        
+        return proxy.Address?.ToString() ?? "неизвестный прокси";
+    }
+    
+    /// <summary>
+    /// Проверяет, связано ли исключение с ошибкой прокси
+    /// </summary>
+    private bool IsProxyException(Exception ex)
+    {
+        // Проверяем внутреннее исключение WebException
+        if (ex.InnerException is WebException webEx)
+        {
+            if (webEx.Status == WebExceptionStatus.NameResolutionFailure ||
+                webEx.Status == WebExceptionStatus.ConnectFailure ||
+                webEx.Status == WebExceptionStatus.ProxyNameResolutionFailure ||
+                webEx.Status == WebExceptionStatus.ConnectionClosed ||
+                webEx.Status == WebExceptionStatus.Timeout ||
+                webEx.Status == WebExceptionStatus.RequestCanceled)
+            {
+                return true;
+            }
+        }
+        
+        // Проверяем сообщение на наличие ключевых слов, связанных с прокси
+        string message = ex.Message.ToLowerInvariant();
+        if (message.Contains("proxy") || message.Contains("tunnel") || 
+            message.Contains("502") || message.Contains("503") || 
+            message.Contains("504") || message.Contains("407") ||
+            message.Contains("connection refused") || 
+            message.Contains("connection failed") ||
+            message.Contains("unable to connect"))
+        {
+            return true;
+        }
+        
+        return false;
+    }
+    
+    /// <summary>
+    /// Получает детальное сообщение об ошибке из исключения
+    /// </summary>
+    private string GetDetailedErrorMessage(Exception ex)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append(ex.Message);
+        
+        if (ex.InnerException != null)
+        {
+            sb.Append(" -> ");
+            sb.Append(ex.InnerException.Message);
+            
+            if (ex.InnerException is WebException webEx)
+            {
+                sb.Append($" (Статус: {webEx.Status})");
+            }
+        }
+        
+        return sb.ToString();
+    }
+    
+    /// <summary>
+    /// Определяет нужно ли переключать прокси для данного типа исключения
+    /// </summary>
+    private bool ShouldSwitchProxyForException(Exception ex)
+    {
+        // Проверяем на SocketException
+        if (ex is SocketException || ex.InnerException is SocketException)
+            return true;
+            
+        // Проверяем на IOException с определенными сообщениями
+        if (ex is IOException || ex.InnerException is IOException)
+        {
+            string message = ex.Message;
+            if (ex.InnerException != null)
+                message += ex.InnerException.Message;
+                
+            message = message.ToLowerInvariant();
+            
+            if (message.Contains("connection") || 
+                message.Contains("reset") ||
+                message.Contains("aborted") ||
+                message.Contains("closed") ||
+                message.Contains("read"))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     /// <summary>
