@@ -29,4 +29,11 @@ public class ProxySettings
     /// Пароль для аутентификации на прокси (если требуется)
     /// </summary>
     public string? Password { get; set; }
+
+    /// <summary>
+    /// Список прокси-серверов. Если указан, предпочтителен к использованию.
+    /// </summary>
+    public List<ProxyServer>? Servers { get; set; }
+
+    // ===== Поля ниже оставлены для обратной совместимости с прежней конфигурацией =====
 } 
