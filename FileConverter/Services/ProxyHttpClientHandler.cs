@@ -41,6 +41,12 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
     // Количество успешных запросов, после которого произойдет переключение на следующий прокси
     private const int ROTATE_AFTER_REQUESTS = 50;
 
+    // Таймаут для проверки доступности прокси (в секундах)
+    private const int PROXY_CHECK_TIMEOUT_SECONDS = 10;
+
+    // Максимальное время ожидания для более быстрого переключения прокси при проблемах (в секундах)
+    private const int PROXY_CONNECTION_TIMEOUT_SECONDS = 30;
+
     // Счетчик успешных запросов для текущего прокси
     private int _currentProxySuccessCount = 0;
 
@@ -62,6 +68,9 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         _configuration = configuration;
 
         _logger.LogInformation("Инициализация ProxyHttpClientHandler...");
+
+        // Настройка ServicePoint для управления соединениями
+        ConfigureServicePointManager();
 
         // Загружаем прокси из конфигурации
         LoadProxiesFromConfiguration();
@@ -90,6 +99,42 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
 
         _logger.LogInformation("ProxyHttpClientHandler инициализирован, таймер проверки прокси запущен с интервалом {Minutes} минут", CHECK_PERIOD_MINUTES);
         _logger.LogInformation("Ротация прокси: каждые {Count} успешных запросов", ROTATE_AFTER_REQUESTS);
+    }
+
+    /// <summary>
+    /// Настраивает параметры ServicePointManager для улучшения обработки соединений
+    /// </summary>
+    private void ConfigureServicePointManager()
+    {
+        try
+        {
+            // Максимальное время ожидания при установке соединения
+            ServicePointManager.MaxServicePointIdleTime = 10000; // 10 секунд
+            
+            // Максимальное число одновременных соединений к одному хосту
+            ServicePointManager.DefaultConnectionLimit = 20;
+            
+            // Увеличиваем скорость определения разрыва соединения
+            ServicePointManager.DnsRefreshTimeout = 10000; // 30 секунд
+            
+            // Уменьшаем время ожидания установки подключения
+            ServicePointManager.Expect100Continue = false;
+            
+            // Отключаем проверку сертификатов для работы с недоверенными прокси
+            ServicePointManager.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true;
+            
+            // Включаем поддержку всех безопасных протоколов TLS
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
+            
+            _logger.LogInformation("ServicePointManager настроен: MaxIdleTime={MaxIdleTime}мс, ConnectionLimit={ConnectionLimit}, DnsRefreshTimeout={DnsRefresh}мс", 
+                ServicePointManager.MaxServicePointIdleTime,
+                ServicePointManager.DefaultConnectionLimit,
+                ServicePointManager.DnsRefreshTimeout);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка при настройке ServicePointManager");
+        }
     }
 
     /// <summary>
@@ -492,7 +537,7 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
 
             // Создаем временный HttpClient
             using var httpClient = new HttpClient(handler);
-            httpClient.Timeout = TimeSpan.FromSeconds(10); // Ограничиваем время ожидания
+            httpClient.Timeout = TimeSpan.FromSeconds(PROXY_CHECK_TIMEOUT_SECONDS); // Ограничиваем время ожидания
 
             // Отправляем запрос к надежному сайту для проверки
             var response = await httpClient.GetAsync("https://www.google.com");
@@ -660,9 +705,13 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         try
         {
             await CheckProxyRotation();
+            
+            // Создаем таймаут для автоматического прерывания запроса, если он выполняется слишком долго
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(PROXY_CONNECTION_TIMEOUT_SECONDS));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
 
             var startTime = DateTime.Now;
-            var response = await base.SendAsync(request, cancellationToken);
+            var response = await base.SendAsync(request, linkedCts.Token);
             var elapsed = DateTime.Now - startTime;
 
             // Приблизительно оцениваем размер переданных данных
@@ -707,18 +756,26 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             // Помечаем текущий прокси как проблемный и пытаемся переключиться
             await MarkCurrentProxyAsFailed();
 
+            // Проверяем новый прокси после переключения
+            bool isPossibleToRetry = this.UseProxy && 
+                                     this.Proxy != null && 
+                                     _currentProxy != null && 
+                                     !ProxyEquals(_currentProxy, failedProxy);
+
             // Повторяем запрос только если удалось переключиться на ДРУГОЙ доступный прокси
-            if (this.UseProxy && this.Proxy != null && _currentProxy != null && !ProxyEquals(_currentProxy, failedProxy))
+            if (isPossibleToRetry)
             {
                 string newProxyInfo = GetProxyDisplayName(_currentProxy);
                 _logger.LogInformation("Запрос #{RequestId}: Повторная попытка через новый прокси {NewProxy} после ошибки", requestId, newProxyInfo);
 
                 try
                 {
-                    // Важно: создаем НОВЫЙ HttpRequestMessage для повторной отправки, если это необходимо
-                    // В данном случае base.SendAsync может повторно использовать тот же request, 
-                    // но для надежности можно было бы клонировать request, если бы он модифицировался.
-                    return await base.SendAsync(request, cancellationToken);
+                    // Создаем новый запрос для повторной отправки
+                    var newRequest = CloneHttpRequestMessage(request);
+                    // Создаем новый таймаут для повторной попытки
+                    using var retryTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(PROXY_CONNECTION_TIMEOUT_SECONDS));
+                    using var retryLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(retryTimeoutCts.Token, cancellationToken);
+                    return await base.SendAsync(newRequest, retryLinkedCts.Token);
                 }
                 catch (Exception retryEx)
                 {
@@ -748,8 +805,25 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             WebProxy? failedProxy = requestProxy; // Запоминаем прокси, на котором произошла ошибка
             string failedProxyInfo = currentProxyInfo;
 
-            _logger.LogWarning("Запрос #{RequestId}: Таймаут или отмена запроса через {Proxy}. Сообщение: {Message}. Переключаем на другой прокси.",
-                requestId, failedProxyInfo, ex.Message);
+            // Определяем причину отмены запроса
+            bool isTimeout = IsTimeoutException(ex, cancellationToken);
+
+            if (isTimeout)
+            {
+                _logger.LogWarning("Запрос #{RequestId}: Таймаут запроса через {Proxy}. Сообщение: {Message}. Переключаем на другой прокси.",
+                    requestId, failedProxyInfo, ex.Message);
+            }
+            else if (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Запрос #{RequestId} был отменен пользователем.", requestId);
+                // Если отмена пользователем, не повторяем запрос
+                throw; // Передаем исключение TaskCanceledException
+            }
+            else
+            {
+                _logger.LogWarning("Запрос #{RequestId}: Отмена запроса через {Proxy} по неизвестной причине. Сообщение: {Message}.",
+                    requestId, failedProxyInfo, ex.Message);
+            }
 
             // Обновляем статистику
             if (failedProxy != null)
@@ -757,20 +831,21 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
                 UpdateProxyStats(failedProxy, false, 0);
             }
 
-            // Помечаем текущий прокси как проблемный, только если это не отмена операции пользователем
-            if (!cancellationToken.IsCancellationRequested)
+            // Помечаем текущий прокси как проблемный, только если это таймаут, а не отмена операции пользователем
+            if (isTimeout)
             {
                 await MarkCurrentProxyAsFailed();
             }
-            else
-            {
-                _logger.LogInformation("Запрос #{RequestId} был отменен пользователем.", requestId);
-                // Если отмена пользователем, не повторяем запрос
-                throw; // Передаем исключение TaskCanceledException
-            }
+
+            // Проверяем новый прокси после переключения
+            bool isPossibleToRetry = this.UseProxy && 
+                                     this.Proxy != null && 
+                                     _currentProxy != null && 
+                                     !ProxyEquals(_currentProxy, failedProxy) && 
+                                     isTimeout;  // Добавляем условие, что повторная попытка только для таймаутов
 
             // Повторяем запрос только если удалось переключиться на ДРУГОЙ доступный прокси и запрос не был отменен
-            if (this.UseProxy && this.Proxy != null && _currentProxy != null && !ProxyEquals(_currentProxy, failedProxy) && !cancellationToken.IsCancellationRequested)
+            if (isPossibleToRetry)
             {
                 string newProxyInfo = GetProxyDisplayName(_currentProxy);
 
@@ -779,7 +854,12 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
 
                 try
                 {
-                    return await base.SendAsync(request, cancellationToken);
+                    // Создаем новый запрос для повторной отправки
+                    var newRequest = CloneHttpRequestMessage(request);
+                    // Создаем новый таймаут для повторной попытки
+                    using var retryTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(PROXY_CONNECTION_TIMEOUT_SECONDS));
+                    using var retryLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(retryTimeoutCts.Token, cancellationToken);
+                    return await base.SendAsync(newRequest, retryLinkedCts.Token);
                 }
                 catch (Exception retryEx)
                 {
@@ -788,21 +868,25 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
                     throw retryEx; // Передаем исключение от повторной попытки
                 }
             }
-            else if (this.UseProxy && this.Proxy != null && _currentProxy != null && ProxyEquals(_currentProxy, failedProxy) && !cancellationToken.IsCancellationRequested)
+            else if (this.UseProxy && this.Proxy != null && _currentProxy != null && ProxyEquals(_currentProxy, failedProxy) && isTimeout)
             {
                 _logger.LogWarning("Запрос #{RequestId}: Не удалось переключиться на другой прокси после таймаута (остался {Proxy} или доступен только он). Повторная попытка не выполняется.", requestId, failedProxyInfo);
                 // Не повторяем запрос, передаем исходное исключение
                 throw;
             }
-            else if (!this.UseProxy && !cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogError("Запрос #{RequestId}: Нет доступных прокси для переключения после таймаута на {Proxy}. Запрос не выполнен.", requestId, failedProxyInfo);
-                // Передаем исходное исключение
-                throw;
-            }
             else
             {
-                // Если запрос был отменен, просто передаем исключение
+                if (isTimeout)
+                {
+                    _logger.LogError("Запрос #{RequestId}: Нет доступных прокси для переключения после таймаута на {Proxy}. Запрос не выполнен.", 
+                        requestId, failedProxyInfo);
+                }
+                else
+                {
+                    _logger.LogInformation("Запрос #{RequestId}: Отмена запроса пользователем или другой причине. Запрос не выполнен.", 
+                        requestId);
+                }
+                // Передаем исходное исключение
                 throw;
             }
         }
@@ -933,6 +1017,93 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Клонирует HttpRequestMessage для повторной отправки
+    /// </summary>
+    private HttpRequestMessage CloneHttpRequestMessage(HttpRequestMessage request)
+    {
+        var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+        
+        // Копируем заголовки
+        foreach (var header in request.Headers)
+        {
+            clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        
+        // Копируем свойства
+        foreach (var prop in request.Properties)
+        {
+            clone.Properties.Add(prop);
+        }
+        
+        // Копируем содержимое, если есть
+        if (request.Content != null)
+        {
+            if (request.Content is StringContent)
+            {
+                // Для строкового содержимого удобнее создать новый экземпляр
+                var content = request.Content.ReadAsStringAsync().Result;
+                var contentType = request.Content.Headers.ContentType?.ToString();
+                var stringContent = new StringContent(content);
+                
+                if (!string.IsNullOrEmpty(contentType))
+                {
+                    stringContent.Headers.ContentType = System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
+                }
+                
+                clone.Content = stringContent;
+            }
+            else
+            {
+                // Для других типов содержимого нужно обрабатывать отдельно
+                // В большинстве случаев безопаснее создать новый контент
+                try
+                {
+                    var byteContent = request.Content.ReadAsByteArrayAsync().Result;
+                    var newContent = new ByteArrayContent(byteContent);
+                    
+                    // Копируем заголовки содержимого
+                    foreach (var header in request.Content.Headers)
+                    {
+                        newContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                    
+                    clone.Content = newContent;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Не удалось клонировать содержимое запроса: {Error}", ex.Message);
+                    // В случае ошибки не устанавливаем содержимое
+                }
+            }
+        }
+        
+        return clone;
+    }
+
+    /// <summary>
+    /// Определяет, является ли исключение результатом таймаута, а не пользовательской отмены
+    /// </summary>
+    private bool IsTimeoutException(TaskCanceledException ex, CancellationToken userCancellationToken)
+    {
+        // Проверяем содержит ли сообщение информацию о таймауте
+        bool messageIndicatesTimeout = ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) || 
+                                       ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase);
+        
+        // Проверяем наличие внутреннего TimeoutException
+        bool hasTimeoutInnerException = ex.InnerException is TimeoutException;
+        
+        // Проверяем, была ли запрошена отмена пользователем
+        bool userRequestedCancellation = userCancellationToken.IsCancellationRequested;
+        
+        // Если пользователь запросил отмену, то это не таймаут
+        if (userRequestedCancellation)
+            return false;
+            
+        // В противном случае считаем таймаутом, если есть соответствующие признаки
+        return messageIndicatesTimeout || hasTimeoutInnerException;
     }
 
     /// <summary>
