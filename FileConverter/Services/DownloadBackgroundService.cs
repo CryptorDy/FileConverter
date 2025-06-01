@@ -182,7 +182,6 @@ namespace FileConverter.Services
                                     job.VideoHash = videoHash;
                                     job.LastAttemptAt = DateTime.UtcNow;
                                     await jobRepository.UpdateJobAsync(job);
-                                    logger.LogInformation($"------ " + JsonConvert.SerializeObject(job));
                                     logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
                                 } else
                                 {
