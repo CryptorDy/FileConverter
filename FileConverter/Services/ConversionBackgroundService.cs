@@ -174,12 +174,12 @@ namespace FileConverter.Services
                              logger.LogInformation("Задача {JobId}: конвертация успешно завершена. MP3 файл: {Mp3Path}, Размер: {FileSize} байт", jobId, mp3Path, mp3FileSize);
 
 
-                            // Помещаем задачу в очередь загрузки
-                            await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoPath, videoHash), stoppingToken);
-                            logger.LogInformation("Задача {JobId}: передана в очередь загрузки (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
-                             await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку MP3");
+                            // Помещаем задачу в очередь извлечения ключевых кадров
+                            await _channels.KeyframeExtractionChannel.Writer.WriteAsync((jobId, videoPath, mp3Path, videoHash), stoppingToken);
+                            logger.LogInformation("Задача {JobId}: передана в очередь извлечения ключевых кадров (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
+                             await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на извлечение ключевых кадров");
 
-                            // НЕ удаляем файлы videoPath и mp3Path здесь, они нужны для загрузки
+                            // НЕ удаляем файлы videoPath и mp3Path здесь, они нужны для извлечения кадров и загрузки
 
                         }
                         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

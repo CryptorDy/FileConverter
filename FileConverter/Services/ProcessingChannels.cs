@@ -22,16 +22,23 @@ namespace FileConverter.Services
         public Channel<(string JobId, string VideoPath, string VideoHash)> ConversionChannel { get; }
 
         /// <summary>
-        /// Канал для задач на загрузку MP3 в хранилище.
-        /// Содержит кортеж (JobId, Mp3Path, VideoPath, VideoHash).
+        /// Канал для задач на извлечение ключевых кадров.
+        /// Содержит кортеж (JobId, VideoPath, Mp3Path, VideoHash).
         /// </summary>
-        public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash)> UploadChannel { get; }
+        public Channel<(string JobId, string VideoPath, string Mp3Path, string VideoHash)> KeyframeExtractionChannel { get; }
+
+        /// <summary>
+        /// Канал для задач на загрузку файлов в хранилище.
+        /// Содержит кортеж (JobId, Mp3Path, VideoPath, VideoHash, KeyframePaths).
+        /// </summary>
+        public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<string> KeyframePaths)> UploadChannel { get; }
 
         public ProcessingChannels(IConfiguration configuration)
         {
             // Настройки размеров очередей из конфигурации с разумными значениями по умолчанию
             int downloadQueueCapacity = configuration.GetValue<int>("Performance:DownloadQueueCapacity", 100);
             int conversionQueueCapacity = configuration.GetValue<int>("Performance:ConversionQueueCapacity", Math.Max(Environment.ProcessorCount, 4)); // Емкость зависит от процессора, но не меньше 4
+            int keyframeExtractionQueueCapacity = configuration.GetValue<int>("Performance:KeyframeExtractionQueueCapacity", Math.Max(Environment.ProcessorCount, 4));
             int uploadQueueCapacity = configuration.GetValue<int>("Performance:UploadQueueCapacity", 10);
 
             DownloadChannel = Channel.CreateBounded<(string JobId, string VideoUrl)>(
@@ -50,11 +57,19 @@ namespace FileConverter.Services
                     SingleReader = false // Несколько читателей (ConversionBackgroundService воркеры)
                 });
 
-            UploadChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash)>(
-                new BoundedChannelOptions(uploadQueueCapacity)
+            KeyframeExtractionChannel = Channel.CreateBounded<(string JobId, string VideoPath, string Mp3Path, string VideoHash)>(
+                new BoundedChannelOptions(keyframeExtractionQueueCapacity)
                 {
                     FullMode = BoundedChannelFullMode.Wait,
                     SingleWriter = false, // Несколько писателей (ConversionBackgroundService воркеры)
+                    SingleReader = false // Несколько читателей (KeyframeExtractionBackgroundService воркеры)
+                });
+
+            UploadChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<string> KeyframePaths)>(
+                new BoundedChannelOptions(uploadQueueCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleWriter = false, // Несколько писателей (KeyframeExtractionBackgroundService воркеры)
                     SingleReader = false // Несколько читателей (UploadBackgroundService воркеры)
                 });
         }

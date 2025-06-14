@@ -8,6 +8,7 @@ namespace FileConverter.Models
         public string VideoHash { get; set; } = string.Empty;
         public string VideoUrl { get; set; } = string.Empty;
         public string? AudioUrl { get; set; }
+        public List<string> KeyframeUrls { get; set; } = new List<string>();
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? LastAccessedAt { get; set; }
         public long FileSizeBytes { get; set; }

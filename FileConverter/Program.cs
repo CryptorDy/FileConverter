@@ -250,6 +250,7 @@ builder.Services.AddCors(options =>
 // Регистрируем фоновые службы (Hosted Services)
 builder.Services.AddHostedService<DownloadBackgroundService>();
 builder.Services.AddHostedService<ConversionBackgroundService>();
+builder.Services.AddHostedService<KeyframeExtractionBackgroundService>();
 builder.Services.AddHostedService<UploadBackgroundService>();
 builder.Services.AddHostedService<JobRecoveryHostedService>();
 builder.Services.AddHostedService<TempFileCleanupHostedService>();

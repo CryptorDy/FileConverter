@@ -9,6 +9,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace FileConverter.Services
 {
@@ -58,6 +60,7 @@ namespace FileConverter.Services
                 string mp3Path = string.Empty;   // Путь к временному MP3 файлу
                 string videoPath = string.Empty; // Путь к временному видео файлу
                 string videoHash = string.Empty;
+                List<string> keyframePaths = new List<string>();
 
                 try
                 {
@@ -66,8 +69,10 @@ namespace FileConverter.Services
                     mp3Path = item.Mp3Path;
                     videoPath = item.VideoPath;
                     videoHash = item.VideoHash;
+                    keyframePaths = item.KeyframePaths ?? new List<string>();
 
-                     _logger.LogInformation("UploadWorker получил задачу {JobId} (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
+                     _logger.LogInformation("UploadWorker получил задачу {JobId} (MP3: {Mp3Path}, Видео: {VideoPath}, Кадров: {KeyframeCount})", 
+                         jobId, mp3Path, videoPath, keyframePaths.Count);
 
                     using (var scope = _serviceProvider.CreateScope())
                     {
@@ -91,6 +96,7 @@ namespace FileConverter.Services
                                 // Очищаем временные файлы, если они остались
                                 CleanupFile(tempFileManager, videoPath, logger, jobId);
                                 CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                                CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
                                 continue; 
                             }
                             
@@ -111,18 +117,22 @@ namespace FileConverter.Services
                             
                             logger.LogInformation("Задача {JobId}: начало загрузки файлов в S3...", jobId);
 
-                            // Параллельно загружаем видео и MP3 в S3
+                            // Параллельно загружаем видео, MP3 и ключевые кадры в S3
                             var videoUploadTask = storageService.UploadFileAsync(videoPath, "video/mp4");
                             var mp3UploadTask = storageService.UploadFileAsync(mp3Path, "audio/mpeg");
-                            
-                            await Task.WhenAll(videoUploadTask, mp3UploadTask);
+                            var keyframesUploadTasks = keyframePaths.Select(p => storageService.UploadFileAsync(p, "image/jpeg")).ToList();
+
+                            // Ожидаем завершения всех задач загрузки
+                            await Task.WhenAll(videoUploadTask, mp3UploadTask); // Основные файлы
+                            var keyframeUrls = (await Task.WhenAll(keyframesUploadTasks)).ToList(); // Кадры
                             
                             var videoUrl = await videoUploadTask; // URL видео в S3
                             var mp3Url = await mp3UploadTask;   // URL MP3 в S3
                             
-                            logger.LogInformation("Задача {JobId}: файлы загружены. Видео URL: {VideoUrl}, MP3 URL: {Mp3Url}", jobId, videoUrl, mp3Url);
+                            logger.LogInformation("Задача {JobId}: файлы загружены. Видео URL: {VideoUrl}, MP3 URL: {Mp3Url}, Кадров: {KeyframeCount}", 
+                                jobId, videoUrl, mp3Url, keyframeUrls.Count);
                             await conversionLogger.LogUploadCompletedAsync(jobId, mp3Url);
-                            await conversionLogger.LogSystemInfoAsync($"Файлы загружены для задания {jobId}. URL видео: {videoUrl}, URL MP3: {mp3Url}");
+                            await conversionLogger.LogSystemInfoAsync($"Файлы загружены для задания {jobId}. URL видео: {videoUrl}, URL MP3: {mp3Url}, ключевых кадров: {keyframeUrls.Count}");
 
                             // Сохраняем информацию о файлах в репозиторий MediaItems
                             var mediaItem = new MediaStorageItem
@@ -130,6 +140,7 @@ namespace FileConverter.Services
                                 VideoHash = videoHash,
                                 VideoUrl = videoUrl,
                                 AudioUrl = mp3Url,
+                                KeyframeUrls = keyframeUrls,
                                 FileSizeBytes = job.FileSizeBytes ?? 0 // Берем размер из задачи
                             };
                             
@@ -154,6 +165,7 @@ namespace FileConverter.Services
                              // Очищаем временные файлы
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
                             CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
                         }
                         catch (Exception ex)
                         {
@@ -166,6 +178,7 @@ namespace FileConverter.Services
                              // Удаляем временные файлы после завершения (успешного или неуспешного) этапа загрузки
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
                             CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
                         }
                     } // Конец using scope
                 }
@@ -199,6 +212,16 @@ namespace FileConverter.Services
                     var conversionLogger = cleanupScope.ServiceProvider.GetRequiredService<IConversionLogger>();
                     conversionLogger.LogWarningAsync(jobId, $"Ошибка при удалении временного файла после загрузки: {path}", ex.Message).GetAwaiter().GetResult();
                 }
+            }
+        }
+
+        private void CleanupFiles(ITempFileManager tempFileManager, List<string> filePaths, ILogger logger, string jobId)
+        {
+            if (filePaths == null) return;
+            
+            foreach (var filePath in filePaths)
+            {
+                CleanupFile(tempFileManager, filePath, logger, jobId);
             }
         }
 

@@ -70,6 +70,17 @@ namespace FileConverter.Services
             return directory;
         }
 
+        public string CreateTempDirectory()
+        {
+            // Создаем уникальную поддиректорию с использованием GUID
+            string uniqueDirName = Guid.NewGuid().ToString("N")[..8]; // Берем первые 8 символов GUID
+            string directory = Path.Combine(GetTempDirectory(), uniqueDirName);
+            Directory.CreateDirectory(directory);
+            
+            _logger.LogDebug("Created temporary directory: {Directory}", directory);
+            return directory;
+        }
+
         public string CreateTempFile(string extension)
         {
             // Очищаем расширение от неправильных символов

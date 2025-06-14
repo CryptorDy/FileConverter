@@ -5,6 +5,9 @@ namespace FileConverter.Services.Interfaces
         // Создает временную директорию и возвращает путь к ней
         string GetTempDirectory();
 
+        // Создает уникальную временную поддиректорию и возвращает путь к ней
+        string CreateTempDirectory();
+
         // Создает временный файл с указанным расширением
         string CreateTempFile(string extension);
 
