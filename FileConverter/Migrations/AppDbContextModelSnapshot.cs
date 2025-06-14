@@ -196,7 +196,6 @@ namespace FileConverter.Migrations
                         .HasColumnType("bigint");
 
                     b.Property<List<string>>("KeyframeUrls")
-                        .IsRequired()
                         .HasColumnType("text[]");
 
                     b.Property<DateTime?>("LastAccessedAt")

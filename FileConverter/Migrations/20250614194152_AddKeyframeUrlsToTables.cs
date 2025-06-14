@@ -6,11 +6,17 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace FileConverter.Migrations
 {
     /// <inheritdoc />
-    public partial class AddKeyframeUrlsToJobs : Migration
+    public partial class AddKeyframeUrlsToTables : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.AddColumn<List<string>>(
+                name: "KeyframeUrls",
+                table: "MediaItems",
+                type: "text[]",
+                nullable: true);
+
             migrationBuilder.AddColumn<List<string>>(
                 name: "KeyframeUrls",
                 table: "ConversionJobs",
@@ -21,6 +27,10 @@ namespace FileConverter.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropColumn(
+                name: "KeyframeUrls",
+                table: "MediaItems");
+
             migrationBuilder.DropColumn(
                 name: "KeyframeUrls",
                 table: "ConversionJobs");

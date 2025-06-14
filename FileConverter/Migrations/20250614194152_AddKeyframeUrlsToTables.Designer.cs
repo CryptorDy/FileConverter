@@ -13,8 +13,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FileConverter.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20250614192549_AddKeyframeUrlsToJobs")]
-    partial class AddKeyframeUrlsToJobs
+    [Migration("20250614194152_AddKeyframeUrlsToTables")]
+    partial class AddKeyframeUrlsToTables
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -199,7 +199,6 @@ namespace FileConverter.Migrations
                         .HasColumnType("bigint");
 
                     b.Property<List<string>>("KeyframeUrls")
-                        .IsRequired()
                         .HasColumnType("text[]");
 
                     b.Property<DateTime?>("LastAccessedAt")
