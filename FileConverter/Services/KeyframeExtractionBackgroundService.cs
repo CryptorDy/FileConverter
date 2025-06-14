@@ -198,7 +198,8 @@ namespace FileConverter.Services
             for (int i = 1; i <= _keyframeCount; i++)
             {
                 var timePosition = TimeSpan.FromSeconds(interval * i);
-                var outputPath = Path.Combine(outputDir, $"keyframe_{i:D3}.jpg");
+                // Используем уникальное имя файла с jobId для потокобезопасности
+                var outputPath = Path.Combine(outputDir, $"{jobId}_keyframe_{i:D3}.jpg");
                 
                 // Создаем команду FFmpeg для извлечения кадра
                 var conversion = FFmpeg.Conversions.New()
@@ -206,21 +207,31 @@ namespace FileConverter.Services
                     .AddParameter($"-ss {timePosition:hh\\:mm\\:ss\\.fff}")
                     .AddParameter("-vframes 1")
                     .AddParameter($"-q:v {_keyframeQuality}")
-                    .AddParameter("-y") // Перезаписывать файлы
                     .SetOutput(outputPath);
 
                 await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: извлечение кадра {i}/{_keyframeCount} в позиции {timePosition:hh\\:mm\\:ss}");
                 
-                await conversion.Start(stoppingToken);
-                
-                if (File.Exists(outputPath))
+                try
                 {
-                    keyframePaths.Add(outputPath);
+                    await conversion.Start(stoppingToken);
+                    
+                    if (File.Exists(outputPath))
+                    {
+                        keyframePaths.Add(outputPath);
+                        logger.LogDebug("Задача {JobId}: кадр {FrameNumber} успешно извлечен: {OutputPath}", 
+                            jobId, i, outputPath);
+                    }
+                    else
+                    {
+                        logger.LogWarning("Задача {JobId}: не удалось извлечь кадр {FrameNumber} в позиции {TimePosition}", 
+                            jobId, i, timePosition);
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    logger.LogWarning("Задача {JobId}: не удалось извлечь кадр {FrameNumber} в позиции {TimePosition}", 
+                    logger.LogError(ex, "Задача {JobId}: ошибка при извлечении кадра {FrameNumber} в позиции {TimePosition}", 
                         jobId, i, timePosition);
+                    // Продолжаем с следующим кадром, не прерываем весь процесс
                 }
             }
             
