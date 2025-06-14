@@ -149,7 +149,10 @@ namespace FileConverter.Services
                             await conversionLogger.LogSystemInfoAsync($"Медиа элемент сохранен в хранилище C3 с ID: {savedItem.Id}");
 
                             // Обновляем статус задачи на Completed
-                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, mp3Url: mp3Url, newVideoUrl: videoUrl);
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
+                                mp3Url: mp3Url, 
+                                newVideoUrl: videoUrl,
+                                keyframeUrls: keyframeUrls);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Completed);
 
                             // Вычисляем общее время выполнения задачи

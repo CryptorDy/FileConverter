@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FileConverter.Models
 {
@@ -16,6 +17,9 @@ namespace FileConverter.Models
         /// </summary>
         public string? NewVideoUrl { get; set; }
         public string? Mp3Url { get; set; }
+        
+        [Column(TypeName = "text[]")]
+        public List<string>? KeyframeUrls { get; set; }
         
         [JsonConverter(typeof(JsonStringEnumConverter))]
         public ConversionStatus Status { get; set; } = ConversionStatus.Pending;

@@ -15,6 +15,7 @@ namespace FileConverter.Services
     public class DbJobManager : IJobManager
     {
         private readonly IJobRepository _repository;
+        private readonly IMediaItemRepository _mediaItemRepository;
         // private readonly IBackgroundJobClient _backgroundJobClient; // Удаляем Hangfire Client
         private readonly ProcessingChannels _channels; // Добавляем каналы
         private readonly IConversionLogger _conversionLogger; // Добавляем логгер конверсий
@@ -23,6 +24,7 @@ namespace FileConverter.Services
         
         public DbJobManager(
             IJobRepository repository,
+            IMediaItemRepository mediaItemRepository,
             // IBackgroundJobClient backgroundJobClient, // Удаляем Hangfire Client
             ProcessingChannels channels, // Добавляем каналы
             IConversionLogger conversionLogger, // Добавляем логгер
@@ -30,6 +32,7 @@ namespace FileConverter.Services
             IConfiguration configuration)
         {
             _repository = repository;
+            _mediaItemRepository = mediaItemRepository;
             // _backgroundJobClient = backgroundJobClient; // Удаляем Hangfire Client
             _channels = channels; // Сохраняем каналы
             _conversionLogger = conversionLogger; // Сохраняем логгер
@@ -220,6 +223,7 @@ namespace FileConverter.Services
                 VideoUrl = job.VideoUrl, 
                 NewVideoUrl = job.NewVideoUrl, 
                 Mp3Url = job.Mp3Url,
+                KeyframeUrls = job.KeyframeUrls,
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status) 
             };
@@ -242,6 +246,7 @@ namespace FileConverter.Services
                 VideoUrl = job.VideoUrl,
                 NewVideoUrl = job.NewVideoUrl,
                 Mp3Url = job.Mp3Url,
+                KeyframeUrls = job.KeyframeUrls,
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status)
             }).ToList();
@@ -297,6 +302,7 @@ namespace FileConverter.Services
             ConversionStatus status, 
             string? mp3Url = null, 
             string? newVideoUrl = null,
+            List<string>? keyframeUrls = null,
             string? errorMessage = null)
         {
             using var scope = ServiceActivator.GetScope(); // Пытаемся получить scope
@@ -306,7 +312,7 @@ namespace FileConverter.Services
                  logger?.LogDebug("Обновление статуса задачи {JobId} на {Status}. Mp3Url: {Mp3Url}, NewVideoUrl: {NewVideoUrl}, Ошибка: {Error}", 
                     jobId, status, mp3Url ?? "N/A", newVideoUrl ?? "N/A", errorMessage ?? "нет");
 
-                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, errorMessage);
+                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, keyframeUrls, errorMessage);
             }
             catch (ObjectDisposedException ex)
             {

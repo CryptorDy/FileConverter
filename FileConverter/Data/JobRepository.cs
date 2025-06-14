@@ -99,7 +99,13 @@ namespace FileConverter.Data
         }
 
         // Специальные методы
-        public async Task<ConversionJob> UpdateJobStatusAsync(string jobId, ConversionStatus status, string? mp3Url, string? newVideoUrl, string? errorMessage)
+        public async Task<ConversionJob> UpdateJobStatusAsync(
+            string jobId, 
+            ConversionStatus status, 
+            string? mp3Url, 
+            string? newVideoUrl,
+            List<string>? keyframeUrls,
+            string? errorMessage)
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
             {
@@ -112,15 +118,9 @@ namespace FileConverter.Data
                 
                 job.Status = status;
                 
-                if (mp3Url != null)
-                {
-                    job.Mp3Url = mp3Url;
-                }
-
-                if(newVideoUrl != null)
-                {
-                    job.NewVideoUrl = newVideoUrl;
-                }
+                job.NewVideoUrl = newVideoUrl ?? job.NewVideoUrl;
+                job.Mp3Url = mp3Url ?? job.Mp3Url;
+                job.KeyframeUrls = keyframeUrls ?? job.KeyframeUrls;
                 
                 if (errorMessage != null)
                 {
