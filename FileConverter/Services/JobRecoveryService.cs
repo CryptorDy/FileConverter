@@ -23,6 +23,7 @@ namespace FileConverter.Services
         private readonly ILogger<JobRecoveryService> _logger;
         private readonly IConversionLogger _conversionLogger;
         private readonly IConfiguration _configuration;
+        private readonly IYoutubeDownloadService _youtubeDownloadService;
         
         // Настройки восстановления заданий
         private readonly int _staleJobThresholdMinutes;
@@ -37,7 +38,8 @@ namespace FileConverter.Services
             ProcessingChannels channels,
             ILogger<JobRecoveryService> logger,
             IConversionLogger conversionLogger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IYoutubeDownloadService youtubeDownloadService)
         {
             _jobRepository = jobRepository;
             _logRepository = logRepository;
@@ -45,6 +47,7 @@ namespace FileConverter.Services
             _logger = logger;
             _conversionLogger = conversionLogger;
             _configuration = configuration;
+            _youtubeDownloadService = youtubeDownloadService;
             
             // Загружаем настройки
             _staleJobThresholdMinutes = _configuration.GetValue<int>("Performance:StaleJobThresholdMinutes", 30);
@@ -158,9 +161,19 @@ namespace FileConverter.Services
             // Повторно запускаем обработку НЕ через Hangfire, а добавляем в канал
             try
             {
-                await _channels.DownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
-                _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь скачивания.", job.Id);
-                await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь скачивания.");
+                // Проверяем, является ли это YouTube видео
+                if (_youtubeDownloadService.IsYoutubeUrl(job.VideoUrl))
+                {
+                    await _channels.YoutubeDownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
+                    _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь YouTube скачивания.", job.Id);
+                    await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь YouTube скачивания.");
+                }
+                else
+                {
+                    await _channels.DownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
+                    _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь скачивания.", job.Id);
+                    await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь скачивания.");
+                }
                 return true; // Успешно добавлено в очередь
             }
             catch(ChannelClosedException chEx)

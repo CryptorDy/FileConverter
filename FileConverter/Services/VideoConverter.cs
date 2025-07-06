@@ -22,6 +22,7 @@ public class VideoConverter : IVideoConverter
     private readonly UrlValidator _urlValidator;
     private readonly IConversionLogger _conversionLogger;
     private readonly ProcessingChannels _channels;
+    private readonly IYoutubeDownloadService _youtubeDownloadService;
 
     /// <summary>
     /// Создает новый экземпляр сервиса VideoConverter.
@@ -32,7 +33,8 @@ public class VideoConverter : IVideoConverter
         IJobRepository repository,
         UrlValidator urlValidator,
         IConversionLogger conversionLogger,
-        ProcessingChannels channels)
+        ProcessingChannels channels,
+        IYoutubeDownloadService youtubeDownloadService)
     {
         _mediaItemRepository = mediaItemRepository;
         _logger = logger;
@@ -40,6 +42,7 @@ public class VideoConverter : IVideoConverter
         _urlValidator = urlValidator;
         _conversionLogger = conversionLogger;
         _channels = channels;
+        _youtubeDownloadService = youtubeDownloadService;
 
         _logger.LogInformation("VideoConverter сервис инициализирован.");
     }
@@ -138,9 +141,19 @@ public class VideoConverter : IVideoConverter
             // Помещаем видео в очередь загрузки
             try 
             { 
-                await _channels.DownloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
-                await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на скачивание");
-                _logger.LogInformation("Задача {JobId} успешно добавлена в _downloadChannel.", jobId);
+                // Проверяем, является ли это YouTube видео
+                if (_youtubeDownloadService.IsYoutubeUrl(job.VideoUrl))
+                {
+                    await _channels.YoutubeDownloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
+                    await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь YouTube скачивания");
+                    _logger.LogInformation("Задача {JobId} успешно добавлена в YoutubeDownloadChannel.", jobId);
+                }
+                else
+                {
+                    await _channels.DownloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
+                    await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на скачивание");
+                    _logger.LogInformation("Задача {JobId} успешно добавлена в _downloadChannel.", jobId);
+                }
                     
                 // Обновляем LastAttemptAt, чтобы задача не считалась зависшей сразу после добавления
                 job.LastAttemptAt = DateTime.UtcNow; 

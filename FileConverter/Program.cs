@@ -139,6 +139,7 @@ builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
 builder.Services.AddScoped<IConversionLogger, ConversionLogger>();
 builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
+builder.Services.AddScoped<IYoutubeDownloadService, YoutubeDownloadService>();
 builder.Services.AddSingleton<ProcessingChannels>();
 
 // Кэширование, каналы и временные файлы
@@ -252,6 +253,7 @@ builder.Services.AddHostedService<DownloadBackgroundService>();
 builder.Services.AddHostedService<ConversionBackgroundService>();
 builder.Services.AddHostedService<KeyframeExtractionBackgroundService>();
 builder.Services.AddHostedService<UploadBackgroundService>();
+builder.Services.AddHostedService<YoutubeBackgroundService>();
 builder.Services.AddHostedService<JobRecoveryHostedService>();
 builder.Services.AddHostedService<TempFileCleanupHostedService>();
 

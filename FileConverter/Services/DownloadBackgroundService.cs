@@ -195,26 +195,6 @@ namespace FileConverter.Services
                                 continue; // Переходим к следующей задаче
                             }
 
-                            // Обновляем задачу в БД
-                            try
-                            {
-                                job = await jobRepository.GetJobByIdAsync(jobId); // Перечитываем задачу, т.к. она могла измениться
-                                if (job != null)
-                                {
-                                    job.FileSizeBytes = fileData.Length;
-                                    job.TempVideoPath = videoPath; // Сохраняем путь к временному файлу (не в БД)
-                                    job.VideoHash = videoHash;
-                                    job.LastAttemptAt = DateTime.UtcNow; // Обновляем время последней активности
-                                    await jobRepository.UpdateJobAsync(job);
-                                    logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
-                                }
-                            }
-                            catch (Exception updateEx)
-                            {
-                                await conversionLogger.LogErrorAsync(jobId, $"Ошибка обновления информации о файле: {updateEx.Message}", updateEx.StackTrace);
-                                logger.LogError(updateEx, "Задача {JobId}: Ошибка обновления информации о файле в БД", jobId);
-                            }
-
                             // Помещаем задачу в очередь конвертации
                             await _channels.ConversionChannel.Writer.WriteAsync((jobId, videoPath, videoHash), stoppingToken);
                             logger.LogInformation("Задача {JobId}: передана в очередь конвертации (файл {VideoPath}, хеш {VideoHash})", jobId, videoPath, videoHash);

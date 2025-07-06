@@ -33,6 +33,12 @@ namespace FileConverter.Services
         /// </summary>
         public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<string> KeyframePaths)> UploadChannel { get; }
 
+        /// <summary>
+        /// Канал для задач на скачивание YouTube видео.
+        /// Содержит кортеж (JobId, VideoUrl).
+        /// </summary>
+        public Channel<(string JobId, string VideoUrl)> YoutubeDownloadChannel { get; }
+
         public ProcessingChannels(IConfiguration configuration)
         {
             // Настройки размеров очередей из конфигурации с разумными значениями по умолчанию
@@ -40,6 +46,7 @@ namespace FileConverter.Services
             int conversionQueueCapacity = configuration.GetValue<int>("Performance:ConversionQueueCapacity", Math.Max(Environment.ProcessorCount, 4)); // Емкость зависит от процессора, но не меньше 4
             int keyframeExtractionQueueCapacity = configuration.GetValue<int>("Performance:KeyframeExtractionQueueCapacity", Math.Max(Environment.ProcessorCount, 4));
             int uploadQueueCapacity = configuration.GetValue<int>("Performance:UploadQueueCapacity", 10);
+            int youtubeDownloadQueueCapacity = configuration.GetValue<int>("Performance:YoutubeDownloadQueueCapacity", 50);
 
             DownloadChannel = Channel.CreateBounded<(string JobId, string VideoUrl)>(
                 new BoundedChannelOptions(downloadQueueCapacity)
@@ -71,6 +78,14 @@ namespace FileConverter.Services
                     FullMode = BoundedChannelFullMode.Wait,
                     SingleWriter = false, // Несколько писателей (KeyframeExtractionBackgroundService воркеры)
                     SingleReader = false // Несколько читателей (UploadBackgroundService воркеры)
+                });
+
+            YoutubeDownloadChannel = Channel.CreateBounded<(string JobId, string VideoUrl)>(
+                new BoundedChannelOptions(youtubeDownloadQueueCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleWriter = false, // Несколько писателей (API, RecoveryService)
+                    SingleReader = false // Несколько читателей (YoutubeBackgroundService воркеры)
                 });
         }
     }

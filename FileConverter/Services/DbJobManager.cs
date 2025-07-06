@@ -21,6 +21,7 @@ namespace FileConverter.Services
         private readonly IConversionLogger _conversionLogger; // Добавляем логгер конверсий
         private readonly ILogger<DbJobManager> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IYoutubeDownloadService _youtubeDownloadService;
         
         public DbJobManager(
             IJobRepository repository,
@@ -29,7 +30,8 @@ namespace FileConverter.Services
             ProcessingChannels channels, // Добавляем каналы
             IConversionLogger conversionLogger, // Добавляем логгер
             ILogger<DbJobManager> logger,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IYoutubeDownloadService youtubeDownloadService)
         {
             _repository = repository;
             _mediaItemRepository = mediaItemRepository;
@@ -38,6 +40,7 @@ namespace FileConverter.Services
             _conversionLogger = conversionLogger; // Сохраняем логгер
             _logger = logger;
             _configuration = configuration;
+            _youtubeDownloadService = youtubeDownloadService;
         }
 
         public async Task<ConversionJobResponse> EnqueueConversionJob(string videoUrl)
@@ -65,9 +68,19 @@ namespace FileConverter.Services
                 // Запускаем задачу НЕ через Hangfire, а добавляем в канал напрямую
                 try
                 {
-                    await _channels.DownloadChannel.Writer.WriteAsync((newJob.Id, newJob.VideoUrl));
-                    _logger.LogInformation("Задача {JobId} добавлена в очередь скачивания из EnqueueConversionJob.", newJob.Id);
-                    await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} добавлена в очередь скачивания.");
+                    // Проверяем, является ли это YouTube видео
+                    if (_youtubeDownloadService.IsYoutubeUrl(newJob.VideoUrl))
+                    {
+                        await _channels.YoutubeDownloadChannel.Writer.WriteAsync((newJob.Id, newJob.VideoUrl));
+                        _logger.LogInformation("Задача {JobId} добавлена в очередь YouTube скачивания из EnqueueConversionJob.", newJob.Id);
+                        await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} добавлена в очередь YouTube скачивания.");
+                    }
+                    else
+                    {
+                        await _channels.DownloadChannel.Writer.WriteAsync((newJob.Id, newJob.VideoUrl));
+                        _logger.LogInformation("Задача {JobId} добавлена в очередь скачивания из EnqueueConversionJob.", newJob.Id);
+                        await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} добавлена в очередь скачивания.");
+                    }
                 }
                 catch (ChannelClosedException chEx)
                 {
@@ -176,9 +189,19 @@ namespace FileConverter.Services
             {
                  try 
                  { 
-                     await _channels.DownloadChannel.Writer.WriteAsync(jobInfo);
-                     _logger.LogInformation("Задача {JobId} из пакета {BatchId} добавлена в очередь скачивания.", jobInfo.JobId, batchJob.Id);
-                     await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) добавлена в очередь скачивания.");
+                     // Проверяем, является ли это YouTube видео
+                     if (_youtubeDownloadService.IsYoutubeUrl(jobInfo.VideoUrl))
+                     {
+                         await _channels.YoutubeDownloadChannel.Writer.WriteAsync((jobInfo.JobId, jobInfo.VideoUrl));
+                         _logger.LogInformation("Задача {JobId} из пакета {BatchId} добавлена в очередь YouTube скачивания.", jobInfo.JobId, batchJob.Id);
+                         await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) добавлена в очередь YouTube скачивания.");
+                     }
+                     else
+                     {
+                         await _channels.DownloadChannel.Writer.WriteAsync(jobInfo);
+                         _logger.LogInformation("Задача {JobId} из пакета {BatchId} добавлена в очередь скачивания.", jobInfo.JobId, batchJob.Id);
+                         await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) добавлена в очередь скачивания.");
+                     }
                      queuedCount++;
                  }
                  catch (ChannelClosedException chEx) 
