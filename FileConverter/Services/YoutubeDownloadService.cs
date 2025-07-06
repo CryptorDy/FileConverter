@@ -24,6 +24,7 @@ namespace FileConverter.Services
         private readonly ITempFileManager _tempFileManager;
         private readonly YoutubeClient _youtubeClient;
         private readonly HttpClient _httpClient;
+        private readonly IHttpClientFactory _httpClientFactory;
         
         // Настройки для обхода блокировок YouTube
         private readonly int _maxRetryAttempts;
@@ -34,11 +35,13 @@ namespace FileConverter.Services
         public YoutubeDownloadService(
             ILogger<YoutubeDownloadService> logger,
             IConfiguration configuration,
-            ITempFileManager tempFileManager)
+            ITempFileManager tempFileManager,
+            IHttpClientFactory httpClientFactory)
         {
             _logger = logger;
             _configuration = configuration;
             _tempFileManager = tempFileManager;
+            _httpClientFactory = httpClientFactory;
             
             // Загружаем настройки из конфигурации
             _maxRetryAttempts = configuration.GetValue<int>("Youtube:MaxRetryAttempts", 3);
@@ -54,27 +57,22 @@ namespace FileConverter.Services
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             };
             
-            // Создаем HttpClient с настройками для обхода блокировок
-            var httpClientHandler = new HttpClientHandler()
-            {
-                UseCookies = false,
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
-            };
-            
-            _httpClient = new HttpClient(httpClientHandler)
-            {
-                Timeout = TimeSpan.FromSeconds(_operationTimeoutSeconds)
-            };
+            // Создаем HttpClient с прокси через фабрику
+            _httpClient = _httpClientFactory.CreateClient("youtube-downloader");
             
             // Устанавливаем случайный User-Agent
             var randomUserAgent = _userAgents[new Random().Next(_userAgents.Length)];
+            _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", randomUserAgent);
             _httpClient.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
             _httpClient.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate");
             
+            // Устанавливаем таймаут
+            _httpClient.Timeout = TimeSpan.FromSeconds(_operationTimeoutSeconds);
+            
             _youtubeClient = new YoutubeClient(_httpClient);
             
-            _logger.LogInformation("YoutubeDownloadService инициализирован. MaxRetries: {MaxRetries}, RetryDelay: {RetryDelay}с, Timeout: {Timeout}с", 
+            _logger.LogInformation("YoutubeDownloadService инициализирован с прокси. MaxRetries: {MaxRetries}, RetryDelay: {RetryDelay}с, Timeout: {Timeout}с", 
                 _maxRetryAttempts, _retryDelaySeconds, _operationTimeoutSeconds);
         }
 

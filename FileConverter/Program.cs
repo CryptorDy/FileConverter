@@ -70,6 +70,22 @@ builder.Services.AddHttpClient("instagram-downloader", client =>
 })
 .ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
 
+// Добавляем именованный HTTP клиент с прокси для YouTube
+builder.Services.AddHttpClient("youtube-downloader", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(
+        builder.Configuration.GetValue<int>("Performance:DownloadTimeoutMinutes", 30));
+    
+    // Добавляем стандартные заголовки для обхода блокировок YouTube
+    client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8");
+    client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+    client.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate");
+    client.DefaultRequestHeaders.Add("sec-ch-ua", "\"Google Chrome\";v=\"120\", \"Not:A-Brand\";v=\"8\", \"Chromium\";v=\"120\"");
+    client.DefaultRequestHeaders.Add("sec-ch-ua-mobile", "?0");
+    client.DefaultRequestHeaders.Add("sec-ch-ua-platform", "\"Windows\"");
+})
+.ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
+
 // Настраиваем базовый HttpClient по умолчанию с поддержкой прокси
 builder.Services.AddHttpClient("default", client => { })
     .ConfigurePrimaryHttpMessageHandler<ProxyHttpClientHandler>();
