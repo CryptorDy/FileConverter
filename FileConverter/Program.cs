@@ -139,7 +139,7 @@ builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
 builder.Services.AddScoped<IConversionLogger, ConversionLogger>();
 builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
-builder.Services.AddScoped<IYoutubeDownloadService, YoutubeDownloadService>();
+builder.Services.AddSingleton<IYoutubeDownloadService, YoutubeDownloadService>();
 builder.Services.AddSingleton<ProcessingChannels>();
 
 // Кэширование, каналы и временные файлы

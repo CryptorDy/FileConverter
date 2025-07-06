@@ -1,12 +1,13 @@
 using System.Threading;
 using System.Threading.Tasks;
+using System;
 
 namespace FileConverter.Services.Interfaces
 {
     /// <summary>
     /// Интерфейс для сервиса скачивания YouTube видео
     /// </summary>
-    public interface IYoutubeDownloadService
+    public interface IYoutubeDownloadService : IDisposable
     {
         /// <summary>
         /// Скачивает YouTube видео и конвертирует в MP3
