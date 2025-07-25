@@ -105,17 +105,30 @@ builder.WebHost.ConfigureKestrel(options =>
 // Явное указание URL закомментировано, чтобы использовалась переменная окружения ASPNETCORE_URLS
 builder.WebHost.UseUrls("http://0.0.0.0:5080");
 
-// Настройка контекста базы данных
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        npgsqlOptions => 
+// Настройка контекста базы данных с использованием настроенного dataSource
+builder.Services.AddDbContext<AppDbContext>((serviceProvider, options) =>
+{
+    var dataSource = serviceProvider.GetRequiredService<Npgsql.NpgsqlDataSource>();
+    options.UseNpgsql(dataSource, npgsqlOptions => 
         {
             npgsqlOptions.EnableRetryOnFailure(3);
             npgsqlOptions.CommandTimeout(60); // Увеличиваем таймаут команды до 60 сек
-        }
-    ), 
-    ServiceLifetime.Transient); // Изменяем срок жизни контекста для предотвращения проблем с уничтоженным контекстом
+        })
+        .EnableSensitiveDataLogging(false) // Отключаем логирование чувствительных данных в продакшене
+        .ConfigureWarnings(warnings => warnings.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId.NavigationBaseIncludeIgnored));
+}, ServiceLifetime.Transient); // Изменяем срок жизни контекста для предотвращения проблем с уничтоженным контекстом
+
+// Настройка JSON сериализации для PostgreSQL
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
+// Создаем и настраиваем NpgsqlDataSource с поддержкой динамического JSON
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+dataSourceBuilder.EnableDynamicJson();
+var dataSource = dataSourceBuilder.Build();
+
+// Регистрируем dataSource как singleton
+builder.Services.AddSingleton(dataSource);
 
 // Добавляем фабрику контекста базы данных
 builder.Services.AddSingleton<DbContextFactory>();
@@ -359,6 +372,16 @@ catch (Exception ex)
 }
 finally
 {
+    // Очищаем ресурсы
+    try
+    {
+        dataSource?.Dispose();
+    }
+    catch (Exception ex)
+    {
+        Log.Warning(ex, "Error disposing NpgsqlDataSource");
+    }
+    
     Log.Information("FileConverter application shutdown complete");
     Log.CloseAndFlush();
 }
