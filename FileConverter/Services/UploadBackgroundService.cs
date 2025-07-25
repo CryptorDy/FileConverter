@@ -155,6 +155,9 @@ namespace FileConverter.Services
                             logger.LogInformation("Задача {JobId}: медиа элемент сохранен в репозиторий MediaItems с ID: {MediaItemId}", jobId, savedItem.Id);
                             await conversionLogger.LogSystemInfoAsync($"Медиа элемент сохранен в хранилище C3 с ID: {savedItem.Id}");
 
+                            // Сохраняем keyframes в ConversionJob
+                            await jobRepository.UpdateJobKeyframesAsync(jobId, keyframeInfos);
+                            
                             // Обновляем статус задачи на Completed
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
                                 mp3Url: mp3Url, 

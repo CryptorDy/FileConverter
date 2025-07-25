@@ -175,6 +175,19 @@ namespace FileConverter.Data
             });
         }
 
+        public async Task UpdateJobKeyframesAsync(string jobId, List<KeyframeInfo> keyframes)
+        {
+            await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                var job = await dbContext.ConversionJobs.FirstOrDefaultAsync(j => j.Id == jobId);
+                if (job != null)
+                {
+                    job.Keyframes = keyframes;
+                    await dbContext.SaveChangesAsync();
+                }
+            });
+        }
+
         public async Task<List<ConversionJob>> GetJobsByBatchIdAsync(string batchId)
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>

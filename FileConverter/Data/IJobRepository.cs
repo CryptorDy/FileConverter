@@ -27,6 +27,7 @@ namespace FileConverter.Data
         Task<int> GetPendingJobsCountAsync();
         Task<bool> AnyJobsInProcessingAsync();
         Task UpdateJobDurationAsync(string jobId, double durationSeconds);
+        Task UpdateJobKeyframesAsync(string jobId, List<KeyframeInfo> keyframes);
         
         /// <summary>
         /// Получает завершенные задания с MP3 файлами, созданными ранее указанной даты
