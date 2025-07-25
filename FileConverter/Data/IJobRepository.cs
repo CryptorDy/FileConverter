@@ -23,10 +23,10 @@ namespace FileConverter.Data
             ConversionStatus status, 
             string? mp3Url = null, 
             string? newVideoUrl = null,
-            List<string>? keyframeUrls = null,
             string? errorMessage = null);
         Task<int> GetPendingJobsCountAsync();
         Task<bool> AnyJobsInProcessingAsync();
+        Task UpdateJobDurationAsync(string jobId, double durationSeconds);
         
         /// <summary>
         /// Получает завершенные задания с MP3 файлами, созданными ранее указанной даты

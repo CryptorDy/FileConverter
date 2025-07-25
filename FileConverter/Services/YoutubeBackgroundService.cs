@@ -142,7 +142,7 @@ namespace FileConverter.Services
 
                         await conversionLogger.LogDownloadCompletedAsync(jobId, mp3FileSize, mp3Path);
 
-                        await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoUrl, videoHash, new List<string>()), stoppingToken);
+                        await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoUrl, videoHash, new List<KeyframeInfo>()), stoppingToken);
                     }
                     catch (Exception ex)
                     {

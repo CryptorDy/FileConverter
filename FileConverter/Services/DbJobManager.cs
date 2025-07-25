@@ -246,7 +246,7 @@ namespace FileConverter.Services
                 VideoUrl = job.VideoUrl, 
                 NewVideoUrl = job.NewVideoUrl, 
                 Mp3Url = job.Mp3Url,
-                KeyframeUrls = job.KeyframeUrls,
+                Keyframes = job.Keyframes, // Используем данные прямо из БД
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status) 
             };
@@ -269,7 +269,7 @@ namespace FileConverter.Services
                 VideoUrl = job.VideoUrl,
                 NewVideoUrl = job.NewVideoUrl,
                 Mp3Url = job.Mp3Url,
-                KeyframeUrls = job.KeyframeUrls,
+                Keyframes = job.Keyframes,
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status)
             }).ToList();
@@ -325,7 +325,6 @@ namespace FileConverter.Services
             ConversionStatus status, 
             string? mp3Url = null, 
             string? newVideoUrl = null,
-            List<string>? keyframeUrls = null,
             string? errorMessage = null)
         {
             using var scope = ServiceActivator.GetScope(); // Пытаемся получить scope
@@ -335,7 +334,7 @@ namespace FileConverter.Services
                  logger?.LogDebug("Обновление статуса задачи {JobId} на {Status}. Mp3Url: {Mp3Url}, NewVideoUrl: {NewVideoUrl}, Ошибка: {Error}", 
                     jobId, status, mp3Url ?? "N/A", newVideoUrl ?? "N/A", errorMessage ?? "нет");
 
-                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, keyframeUrls, errorMessage);
+                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, errorMessage);
             }
             catch (ObjectDisposedException ex)
             {
@@ -346,6 +345,8 @@ namespace FileConverter.Services
                 logger.LogError(ex, "Ошибка при обновлении статуса задачи {JobId} на {Status}.", jobId, status);
             }
         }
+        
+
         
     }
 } 

@@ -8,10 +8,19 @@ namespace FileConverter.Models
         public string VideoHash { get; set; } = string.Empty;
         public string VideoUrl { get; set; } = string.Empty;
         public string? AudioUrl { get; set; }
-        public List<string>? KeyframeUrls { get; set; }
+        /// <summary>
+        /// Информация о ключевых кадрах с таймкодами (не сохраняется в БД, используется для API)
+        /// </summary>
+        [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+        public List<KeyframeInfo>? Keyframes { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? LastAccessedAt { get; set; }
         public long FileSizeBytes { get; set; }
         public string ContentType { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// Длительность видео в секундах
+        /// </summary>
+        public double? DurationSeconds { get; set; }
     }
 } 

@@ -11,7 +11,10 @@ namespace FileConverter.Models
         public string? VideoUrl { get; set; }
         public string? NewVideoUrl { get; set; }
         public string? Mp3Url { get; set; }
-        public List<string>? KeyframeUrls { get; set; }
+        /// <summary>
+        /// Информация о ключевых кадрах с таймкодами
+        /// </summary>
+        public List<KeyframeInfo>? Keyframes { get; set; }
         public string? ErrorMessage { get; set; }
         public double Progress { get; set; }
     }

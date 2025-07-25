@@ -18,8 +18,11 @@ namespace FileConverter.Models
         public string? NewVideoUrl { get; set; }
         public string? Mp3Url { get; set; }
         
-        [Column(TypeName = "text[]")]
-        public List<string>? KeyframeUrls { get; set; }
+        /// <summary>
+        /// Информация о ключевых кадрах с таймкодами
+        /// </summary>
+        [Column(TypeName = "jsonb")]
+        public List<KeyframeInfo>? Keyframes { get; set; }
         
         [JsonConverter(typeof(JsonStringEnumConverter))]
         public ConversionStatus Status { get; set; } = ConversionStatus.Pending;
@@ -44,6 +47,11 @@ namespace FileConverter.Models
         public int ProcessingAttempts { get; set; } = 0;
         public DateTime? LastAttemptAt { get; set; }
         public string? VideoHash { get; set; }
+        
+        /// <summary>
+        /// Длительность видео в секундах
+        /// </summary>
+        public double? DurationSeconds { get; set; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

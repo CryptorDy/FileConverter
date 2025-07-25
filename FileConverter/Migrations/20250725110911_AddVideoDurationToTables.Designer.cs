@@ -2,9 +2,9 @@
 using System;
 using System.Collections.Generic;
 using FileConverter.Data;
-using FileConverter.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -13,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FileConverter.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250725110911_AddVideoDurationToTables")]
+    partial class AddVideoDurationToTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -66,8 +68,8 @@ namespace FileConverter.Migrations
                     b.Property<long?>("FileSizeBytes")
                         .HasColumnType("bigint");
 
-                    b.Property<List<KeyframeInfo>>("Keyframes")
-                        .HasColumnType("jsonb");
+                    b.Property<List<string>>("KeyframeUrls")
+                        .HasColumnType("text[]");
 
                     b.Property<DateTime?>("LastAttemptAt")
                         .HasColumnType("timestamp with time zone");
@@ -201,6 +203,9 @@ namespace FileConverter.Migrations
 
                     b.Property<long>("FileSizeBytes")
                         .HasColumnType("bigint");
+
+                    b.Property<List<string>>("KeyframeUrls")
+                        .HasColumnType("text[]");
 
                     b.Property<DateTime?>("LastAccessedAt")
                         .HasColumnType("timestamp with time zone");

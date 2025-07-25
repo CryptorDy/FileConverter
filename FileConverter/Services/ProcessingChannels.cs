@@ -29,9 +29,9 @@ namespace FileConverter.Services
 
         /// <summary>
         /// Канал для задач на загрузку файлов в хранилище.
-        /// Содержит кортеж (JobId, Mp3Path, VideoPath, VideoHash, KeyframePaths).
+        /// Содержит кортеж (JobId, Mp3Path, VideoPath, VideoHash, KeyframeInfos).
         /// </summary>
-        public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<string> KeyframePaths)> UploadChannel { get; }
+        public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<KeyframeInfo> KeyframeInfos)> UploadChannel { get; }
 
         /// <summary>
         /// Канал для задач на скачивание YouTube видео.
@@ -72,7 +72,7 @@ namespace FileConverter.Services
                     SingleReader = false // Несколько читателей (KeyframeExtractionBackgroundService воркеры)
                 });
 
-            UploadChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<string> KeyframePaths)>(
+            UploadChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<KeyframeInfo> KeyframeInfos)>(
                 new BoundedChannelOptions(uploadQueueCapacity)
                 {
                     FullMode = BoundedChannelFullMode.Wait,

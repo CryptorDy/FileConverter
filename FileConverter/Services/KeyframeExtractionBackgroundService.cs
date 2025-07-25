@@ -77,7 +77,7 @@ namespace FileConverter.Services
                 string videoPath = string.Empty;
                 string mp3Path = string.Empty;
                 string videoHash = string.Empty;
-                List<string> keyframePaths = new List<string>();
+                List<KeyframeInfo> keyframeInfos = new List<KeyframeInfo>();
 
                 try
                 {
@@ -108,7 +108,7 @@ namespace FileConverter.Services
                                 logger.LogWarning("Задача {JobId} не найдена в репозитории после извлечения из очереди извлечения кадров.", jobId);
                                 await conversionLogger.LogErrorAsync(jobId, $"Задача {jobId} не найдена в БД.");
                                 // Очищаем временные файлы
-                                CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
+                                CleanupFiles(tempFileManager, new List<string>(), logger, jobId);
                                 continue; 
                             }
                             
@@ -136,19 +136,22 @@ namespace FileConverter.Services
                             var videoStream = mediaInfo.VideoStreams.First();
                             var duration = mediaInfo.Duration.TotalSeconds;
                             
+                            // Сохраняем длительность видео в задаче
+                            await jobRepository.UpdateJobDurationAsync(jobId, duration);
+                            
                             // Создаем временную папку для кадров
                             var keyframesDir = tempFileManager.CreateTempDirectory();
                             logger.LogInformation("Задача {JobId}: создана временная папка для кадров {KeyframesDir}", jobId, keyframesDir);
 
                             // Извлекаем ключевые кадры
-                            keyframePaths = await ExtractKeyframes(videoPath, keyframesDir, duration, jobId, conversionLogger, logger, stoppingToken);
+                            keyframeInfos = await ExtractKeyframes(videoPath, keyframesDir, duration, jobId, conversionLogger, logger, stoppingToken);
                             
-                            logger.LogInformation("Задача {JobId}: извлечено {FrameCount} ключевых кадров", jobId, keyframePaths.Count);
+                            logger.LogInformation("Задача {JobId}: извлечено {FrameCount} ключевых кадров", jobId, keyframeInfos.Count);
 
                             // Передаем задачу в очередь загрузки с путями к файлам кадров
-                            await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoPath, videoHash, keyframePaths), stoppingToken);
-                            logger.LogInformation("Задача {JobId}: передана в очередь загрузки с {FrameCount} ключевыми кадрами", jobId, keyframePaths.Count);
-                            await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку с {keyframePaths.Count} ключевыми кадрами");
+                            await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoPath, videoHash, keyframeInfos), stoppingToken);
+                            logger.LogInformation("Задача {JobId}: передана в очередь загрузки с {FrameCount} ключевыми кадрами", jobId, keyframeInfos.Count);
+                            await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку с {keyframeInfos.Count} ключевыми кадрами");
 
                             // НЕ удаляем файлы videoPath, mp3Path и keyframePaths здесь, они нужны для загрузки
                         }
@@ -156,7 +159,7 @@ namespace FileConverter.Services
                         {
                             logger.LogInformation("Обработка задачи {JobId} (извлечение кадров) отменена.", jobId);
                             // Очищаем временные файлы
-                            CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
+                            CleanupFiles(tempFileManager, keyframeInfos?.Select(k => Path.GetFileName(k.Url)).ToList() ?? new List<string>(), logger, jobId);
                             // Также удаляем mp3 и video, так как процесс прерван
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
                             CleanupFile(tempFileManager, mp3Path, logger, jobId);
@@ -167,7 +170,7 @@ namespace FileConverter.Services
                             await conversionLogger.LogErrorAsync(jobId, $"Ошибка при извлечении ключевых кадров: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка извлечения кадров: {ex.Message}");
                             // Очищаем временные файлы
-                            CleanupFiles(tempFileManager, keyframePaths, logger, jobId);
+                            CleanupFiles(tempFileManager, keyframeInfos?.Select(k => Path.GetFileName(k.Url)).ToList() ?? new List<string>(), logger, jobId);
                             // Также удаляем mp3 и video, так как процесс прерван
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
                             CleanupFile(tempFileManager, mp3Path, logger, jobId);
@@ -187,10 +190,10 @@ namespace FileConverter.Services
             }
         }
 
-        private async Task<List<string>> ExtractKeyframes(string videoPath, string outputDir, double durationSeconds, 
+        private async Task<List<KeyframeInfo>> ExtractKeyframes(string videoPath, string outputDir, double durationSeconds, 
             string jobId, IConversionLogger conversionLogger, ILogger logger, CancellationToken stoppingToken)
         {
-            var keyframePaths = new List<string>();
+            var keyframeInfos = new List<KeyframeInfo>();
             
             // Вычисляем интервалы для извлечения кадров
             var interval = durationSeconds / (_keyframeCount + 1); // +1 чтобы не брать самый последний кадр
@@ -217,9 +220,17 @@ namespace FileConverter.Services
                     
                     if (File.Exists(outputPath))
                     {
-                        keyframePaths.Add(outputPath);
-                        logger.LogDebug("Задача {JobId}: кадр {FrameNumber} успешно извлечен: {OutputPath}", 
-                            jobId, i, outputPath);
+                        // Создаем KeyframeInfo с таймкодом
+                        var keyframeInfo = new KeyframeInfo
+                        {
+                            Url = outputPath, // Пока временный путь, URL будет заполнен после загрузки
+                            Timestamp = timePosition,
+                            FrameNumber = i
+                        };
+                        
+                        keyframeInfos.Add(keyframeInfo);
+                        logger.LogDebug("Задача {JobId}: кадр {FrameNumber} успешно извлечен в позиции {TimePosition}: {OutputPath}", 
+                            jobId, i, timePosition, outputPath);
                     }
                     else
                     {
@@ -235,7 +246,7 @@ namespace FileConverter.Services
                 }
             }
             
-            return keyframePaths;
+            return keyframeInfos;
         }
 
         private void CleanupFiles(ITempFileManager tempFileManager, List<string> filePaths, ILogger logger, string jobId)

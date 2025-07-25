@@ -104,7 +104,6 @@ namespace FileConverter.Data
             ConversionStatus status, 
             string? mp3Url, 
             string? newVideoUrl,
-            List<string>? keyframeUrls,
             string? errorMessage)
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
@@ -120,7 +119,6 @@ namespace FileConverter.Data
                 
                 job.NewVideoUrl = newVideoUrl ?? job.NewVideoUrl;
                 job.Mp3Url = mp3Url ?? job.Mp3Url;
-                job.KeyframeUrls = keyframeUrls ?? job.KeyframeUrls;
                 
                 if (errorMessage != null)
                 {
@@ -161,6 +159,19 @@ namespace FileConverter.Data
                     j.Status == ConversionStatus.Downloading || 
                     j.Status == ConversionStatus.Converting || 
                     j.Status == ConversionStatus.Uploading);
+            });
+        }
+
+        public async Task UpdateJobDurationAsync(string jobId, double durationSeconds)
+        {
+            await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                var job = await dbContext.ConversionJobs.FirstOrDefaultAsync(j => j.Id == jobId);
+                if (job != null)
+                {
+                    job.DurationSeconds = durationSeconds;
+                    await dbContext.SaveChangesAsync();
+                }
             });
         }
 
