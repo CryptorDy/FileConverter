@@ -108,12 +108,23 @@ public class VideoConverter : IVideoConverter
                 var existingItem = await _mediaItemRepository.FindByVideoHashAsync(videoHash);
                 if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
                 {
-                    _logger.LogInformation("Задача {JobId}: Найден готовый результат в MediaItems по хешу {VideoHash}. URL: {AudioUrl}", jobId, videoHash, existingItem.AudioUrl);
+                    _logger.LogInformation("Задача {JobId}: Найден готовый результат в MediaItems по хешу {VideoHash}. URL: {AudioUrl}, Кадров: {KeyframeCount}", 
+                        jobId, videoHash, existingItem.AudioUrl, existingItem.Keyframes?.Count ?? 0);
                     await _conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
-                    // Обновляем статус и сохраняем URL результата
+                    
+                    // Обновляем статус и сохраняем URL результата с ключевыми кадрами
                     await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Completed, 
                         mp3Url: existingItem.AudioUrl, 
                         newVideoUrl: existingItem.VideoUrl);
+                    
+                    // Сохраняем ключевые кадры в ConversionJob если они есть
+                    if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
+                    {
+                        await _repository.UpdateJobKeyframesAsync(jobId, existingItem.Keyframes);
+                        _logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
+                            jobId, existingItem.Keyframes.Count);
+                    }
+                    
                     return;
                 }
             }

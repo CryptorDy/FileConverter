@@ -125,6 +125,7 @@ namespace FileConverter.Data
                     // Обновляем поля
                     existingItem.VideoUrl = item.VideoUrl;
                     existingItem.AudioUrl = item.AudioUrl;
+                    existingItem.Keyframes = item.Keyframes;
                     existingItem.LastAccessedAt = DateTime.UtcNow;
                     existingItem.FileSizeBytes = item.FileSizeBytes;
                     existingItem.ContentType = item.ContentType;

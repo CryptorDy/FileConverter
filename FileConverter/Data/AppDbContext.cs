@@ -54,6 +54,10 @@ namespace FileConverter.Data
                 entity.Property(e => e.CreatedAt).IsRequired();
                 entity.Property(e => e.ContentType).IsRequired();
                 
+                // Настраиваем Keyframes как JSON поле
+                entity.Property(e => e.Keyframes)
+                    .HasColumnType("jsonb");
+                
                 // Уникальный индекс по хешу видео
                 entity.HasIndex(e => e.VideoHash).IsUnique();
             });

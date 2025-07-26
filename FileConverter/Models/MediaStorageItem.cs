@@ -9,9 +9,8 @@ namespace FileConverter.Models
         public string VideoUrl { get; set; } = string.Empty;
         public string? AudioUrl { get; set; }
         /// <summary>
-        /// Информация о ключевых кадрах с таймкодами (не сохраняется в БД, используется для API)
+        /// Информация о ключевых кадрах с таймкодами
         /// </summary>
-        [System.ComponentModel.DataAnnotations.Schema.NotMapped]
         public List<KeyframeInfo>? Keyframes { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? LastAccessedAt { get; set; }

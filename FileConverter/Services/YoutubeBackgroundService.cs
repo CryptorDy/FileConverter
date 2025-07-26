@@ -106,7 +106,8 @@ namespace FileConverter.Services
                         // Если есть, то обновляем задачи
                         if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
                         {
-                            logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}", jobId, videoHash, existingItem.AudioUrl);
+                            logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}, Кадров: {KeyframeCount}", 
+                                jobId, videoHash, existingItem.AudioUrl, existingItem.Keyframes?.Count ?? 0);
                             await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
 
                             job = await jobRepository.GetJobByIdAsync(jobId);
@@ -118,6 +119,15 @@ namespace FileConverter.Services
                                 job.NewVideoUrl = existingItem.VideoUrl;
                                 job.VideoHash = videoHash;
                                 job.LastAttemptAt = DateTime.UtcNow;
+                                
+                                // Сохраняем ключевые кадры если они есть
+                                if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
+                                {
+                                    job.Keyframes = existingItem.Keyframes;
+                                    logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
+                                        jobId, existingItem.Keyframes.Count);
+                                }
+                                
                                 await jobRepository.UpdateJobAsync(job);
                                 logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
                             }
