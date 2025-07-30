@@ -160,7 +160,7 @@ namespace FileConverter.Services
                         _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
                         
                         // Добавляем подробное логгирование сырого JSON-ответа
-                        logger.LogDebug("Задача {JobId}: Получен сырой JSON от Essentia: {RawJson}", jobId, analysisJsonResult);
+                        logger.LogInformation("Задача {JobId}: Получен сырой JSON от Essentia: {RawJson}", jobId, analysisJsonResult);
 
                         // Безопасная десериализация с типизированной моделью
                         var analysisResponse = JsonConvert.DeserializeObject<EssentiaAnalysisResponse>(analysisJsonResult);
