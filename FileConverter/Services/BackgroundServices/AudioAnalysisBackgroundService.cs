@@ -81,9 +81,20 @@ namespace FileConverter.Services
                     using var scope = _serviceProvider.CreateScope();
                     var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
                     var conversionLogger = scope.ServiceProvider.GetRequiredService<IConversionLogger>();
-                    var audioAnalyzer = scope.ServiceProvider.GetRequiredService<AudioAnalyzer>();
                     var tempFileManager = scope.ServiceProvider.GetRequiredService<ITempFileManager>();
                     var logger = scope.ServiceProvider.GetRequiredService<ILogger<AudioAnalysisBackgroundService>>();
+
+                    // Пытаемся получить AudioAnalyzer, но если он недоступен - пропускаем анализ
+                    AudioAnalyzer? audioAnalyzer = null;
+                    try
+                    {
+                        audioAnalyzer = scope.ServiceProvider.GetRequiredService<AudioAnalyzer>();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "AudioAnalyzer недоступен, пропускаем анализ аудио для задачи {JobId}", jobId);
+                        await conversionLogger.LogWarningAsync(jobId, "Анализ аудио пропущен - библиотека Essentia недоступна", ex.Message);
+                    }
 
                     DateTime analysisStart = DateTime.UtcNow;
 
@@ -107,23 +118,26 @@ namespace FileConverter.Services
                             continue;
                         }
 
-                        // Обновляем статус на AudioAnalyzing
-                        await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.AudioAnalyzing);
-                        await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.AudioAnalyzing);
-                        
-                        await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Начинаем анализ аудио файла {mp3Path}");
-
-                        // Запускаем таймер для метрик анализа аудио
-                        _metricsCollector.StartTimer("audio_analysis", jobId);
-
-                        logger.LogInformation("Задача {JobId}: запуск анализа аудио с Essentia...", jobId);
-
-                        // Выполняем анализ аудио с защитой от сбоев native кода
-                        string analysisJsonResult;
-                        try
+                        // Если AudioAnalyzer доступен, выполняем анализ аудио
+                        if (audioAnalyzer != null)
                         {
-                            analysisJsonResult = audioAnalyzer.AnalyzeFromFile(mp3Path);
-                        }
+                            // Обновляем статус на AudioAnalyzing
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.AudioAnalyzing);
+                            await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.AudioAnalyzing);
+                            
+                            await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Начинаем анализ аудио файла {mp3Path}");
+
+                            // Запускаем таймер для метрик анализа аудио
+                            _metricsCollector.StartTimer("audio_analysis", jobId);
+
+                            logger.LogInformation("Задача {JobId}: запуск анализа аудио с Essentia...", jobId);
+
+                            // Выполняем анализ аудио с защитой от сбоев native кода
+                            string analysisJsonResult;
+                            try
+                            {
+                                analysisJsonResult = audioAnalyzer.AnalyzeFromFile(mp3Path);
+                            }
                         catch (AccessViolationException avEx)
                         {
                             throw new InvalidOperationException("Критическая ошибка в native библиотеке Essentia (AccessViolation)", avEx);
@@ -165,18 +179,24 @@ namespace FileConverter.Services
                         logger.LogInformation("Задача {JobId}: анализ аудио завершен. BPM: {Bpm}, Confidence: {Confidence}, Beats: {Beats}", 
                             (object)jobId, (object)audioAnalysis.tempo_bpm, (object)audioAnalysis.confidence, (object)audioAnalysis.beats_detected);
 
-                        // Сохраняем результат анализа в базу данных
-                        job.AudioAnalysis = audioAnalysis;
-                        await jobRepository.UpdateJobAsync(job);
+                            // Сохраняем результат анализа в базу данных
+                            job.AudioAnalysis = audioAnalysis;
+                            await jobRepository.UpdateJobAsync(job);
 
-                        long analysisTimeMs = (long)(DateTime.UtcNow - analysisStart).TotalMilliseconds;
-                        
-                        await conversionLogger.LogSystemInfoAsync($"Анализ аудио завершен для задания {jobId}. Время: {analysisTimeMs}мс. BPM: {audioAnalysis.tempo_bpm}");
-                        
-                        logger.LogInformation("Задача {JobId}: анализ аудио успешно завершен и сохранен в БД.", jobId);
+                            long analysisTimeMs = (long)(DateTime.UtcNow - analysisStart).TotalMilliseconds;
+                            
+                            await conversionLogger.LogSystemInfoAsync($"Анализ аудио завершен для задания {jobId}. Время: {analysisTimeMs}мс. BPM: {audioAnalysis.tempo_bpm}");
+                            
+                            logger.LogInformation("Задача {JobId}: анализ аудио успешно завершен и сохранен в БД.", jobId);
 
-                        // Останавливаем таймер для метрик (успешный анализ аудио)
-                        _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
+                            // Останавливаем таймер для метрик (успешный анализ аудио)
+                            _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
+                        }
+                        else
+                        {
+                            logger.LogInformation("Задача {JobId}: анализ аудио пропущен (Essentia недоступна)", jobId);
+                            await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Анализ аудио пропущен - библиотека Essentia недоступна");
+                        }
 
                         // Передаем задачу дальше в очередь извлечения ключевых кадров
                         // Используем videoPath и videoHash, переданные через канал

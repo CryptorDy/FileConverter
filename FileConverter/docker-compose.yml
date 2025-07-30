@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  fileconverter:
+    build: .
+    ports:
+      - "5080:5080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5080
+      - DATABASE_URL=Host=postgres;Database=fileconverter;Username=postgres;Password=postgres
+      - ESSENTIA_SERVICE_URL=http://essentia:8080
+    depends_on:
+      - postgres
+      - essentia
+    volumes:
+      - ./Temp:/tmp/FileConverter/Temp
+      - ./Logs:/app/Logs
+
+  essentia:
+    image: ghcr.io/mtg/essentia:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./Scripts/essentia_service.py:/app/essentia_service.py
+      - ./Temp:/tmp/shared
+    working_dir: /app
+    command: python3 essentia_service.py
+    environment:
+      - PYTHONPATH=/usr/local/lib/python3.11/dist-packages
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=fileconverter
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data: 

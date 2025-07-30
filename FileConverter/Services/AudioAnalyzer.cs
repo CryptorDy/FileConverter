@@ -1,48 +1,18 @@
 using System;
-using System.Runtime.InteropServices;
+using System.Diagnostics;
+using System.Text;
+using System.IO;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Microsoft.Extensions.Logging;
 
 namespace FileConverter.Services
 {
     /// <summary>
-    /// Сервис для анализа аудио с использованием библиотеки Essentia
+    /// Сервис для анализа аудио с использованием библиотеки Essentia через Python
     /// </summary>
     public class AudioAnalyzer : IDisposable
     {
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RhythmAnalysisResult
-        {
-            public float bpm;
-            public float confidence;
-            public IntPtr beat_timestamps;
-            public int beat_count;
-            public IntPtr bpm_intervals;
-            public int interval_count;
-        }
-
-        // Для Linux (Docker)
-        [DllImport("libEssentiaWrapper.so", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int InitializeEssentia();
-
-        [DllImport("libEssentiaWrapper.so", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void ShutdownEssentia();
-
-        [DllImport("libEssentiaWrapper.so", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int AnalyzeRhythmFromFile(
-            [MarshalAs(UnmanagedType.LPStr)] string audioFilePath,
-            out RhythmAnalysisResult result);
-
-        [DllImport("libEssentiaWrapper.so", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int AnalyzeRhythmFromSamples(
-            float[] audioSamples,
-            int sampleCount,
-            int sampleRate,
-            out RhythmAnalysisResult result);
-
-        [DllImport("libEssentiaWrapper.so", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void FreeRhythmResult(ref RhythmAnalysisResult result);
-
         public class AudioAnalysis
         {
             public float tempo_bpm { get; set; }
@@ -53,20 +23,25 @@ namespace FileConverter.Services
             public double rhythm_regularity { get; set; }
         }
 
+        public class EssentiaAnalysisResponse
+        {
+            public string? Error { get; set; }
+            public AudioAnalysis? AudioAnalysis { get; set; }
+        }
+
         private readonly ILogger<AudioAnalyzer> _logger;
         private bool _initialized = false;
         private bool _disposed = false;
+        private string _pythonScriptPath;
 
         public AudioAnalyzer(ILogger<AudioAnalyzer> logger)
         {
             _logger = logger;
+            _pythonScriptPath = string.Empty;
             
             try
             {
-                if (InitializeEssentia() == 0)
-                {
-                    throw new Exception("Не удалось инициализировать Essentia");
-                }
+                InitializeEssentia();
                 _initialized = true;
                 _logger.LogInformation("AudioAnalyzer успешно инициализирован");
             }
@@ -77,203 +52,143 @@ namespace FileConverter.Services
             }
         }
 
+        private void InitializeEssentia()
+        {
+            // Сначала пытаемся использовать скрипт из основной директории
+            var primaryScriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Scripts", "essentia_analyzer.py");
+            
+            if (File.Exists(primaryScriptPath))
+            {
+                // Используем скрипт из основной директории
+                _pythonScriptPath = primaryScriptPath;
+            }
+            else
+            {
+                // Создаем копию во временной директории
+                _pythonScriptPath = Path.Combine(Path.GetTempPath(), "essentia_analyzer.py");
+                CreatePythonScript();
+            }
+            
+            // Проверяем доступность Python и Essentia
+            var testResult = RunPythonScript("--test");
+            if (!string.IsNullOrEmpty(testResult) && testResult.Contains("error"))
+            {
+                throw new Exception($"Essentia недоступна: {testResult}");
+            }
+        }
+
+        private void CreatePythonScript()
+        {
+            // Копируем готовый Python скрипт из ресурсов приложения
+            var sourceScriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Scripts", "essentia_analyzer.py");
+            
+            if (File.Exists(sourceScriptPath))
+            {
+                File.Copy(sourceScriptPath, _pythonScriptPath, overwrite: true);
+            }
+            else
+            {
+                throw new FileNotFoundException($"Python скрипт не найден: {sourceScriptPath}");
+            }
+            
+            // Делаем скрипт исполняемым на Linux
+            if (Environment.OSVersion.Platform == PlatformID.Unix)
+            {
+                var chmod = new ProcessStartInfo("chmod", $"+x {_pythonScriptPath}")
+                {
+                    UseShellExecute = false
+                };
+                Process.Start(chmod)?.WaitForExit();
+            }
+        }
+
         public string AnalyzeFromFile(string audioFilePath)
         {
             if (!_initialized)
             {
-                return CreateErrorJson("Анализатор не инициализирован");
+                throw new InvalidOperationException("AudioAnalyzer не инициализирован");
             }
 
-            if (string.IsNullOrEmpty(audioFilePath) || !File.Exists(audioFilePath))
+            if (!File.Exists(audioFilePath))
             {
-                return CreateErrorJson($"Аудиофайл не найден: {audioFilePath}");
-            }
-
-            try
-            {
-                _logger.LogInformation("Начинаем анализ аудио файла: {AudioFile}", audioFilePath);
-                
-                RhythmAnalysisResult nativeResult;
-                
-                int success = AnalyzeRhythmFromFile(audioFilePath, out nativeResult);
-                if (success == 0)
-                {
-                    _logger.LogWarning("Не удалось проанализировать аудиофайл: {AudioFile}", audioFilePath);
-                    return CreateErrorJson("Не удалось проанализировать аудиофайл");
-                }
-
-                var analysis = ConvertToManagedResult(nativeResult);
-                
-                // Освобождение памяти
-                FreeRhythmResult(ref nativeResult);
-                
-                _logger.LogInformation("Анализ аудио завершен. BPM: {Bpm}, Confidence: {Confidence}, Beats: {Beats}", 
-                    analysis.tempo_bpm, analysis.confidence, analysis.beats_detected);
-                
-                var audioAnalysisJson = new
-                {
-                    source_file = audioFilePath,
-                    audio_analysis = analysis
-                };
-
-                return JsonConvert.SerializeObject(audioAnalysisJson, Formatting.Indented);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Ошибка при анализе аудиофайла: {AudioFile}", audioFilePath);
-                return CreateErrorJson($"Ошибка анализа: {ex.Message}");
-            }
-        }
-
-        public string AnalyzeFromSamples(float[] audioSamples, int sampleRate)
-        {
-            if (!_initialized)
-            {
-                return CreateErrorJson("Анализатор не инициализирован");
-            }
-
-            if (audioSamples == null || audioSamples.Length == 0)
-            {
-                return CreateErrorJson("Массив аудиосэмплов пуст");
+                throw new FileNotFoundException($"Аудио файл не найден: {audioFilePath}");
             }
 
             try
             {
-                _logger.LogInformation("Начинаем анализ аудио из сэмплов. Count: {Count}, SampleRate: {SampleRate}", 
-                    audioSamples.Length, sampleRate);
+                _logger.LogDebug("Начинаем анализ аудио файла: {AudioFilePath}", audioFilePath);
                 
-                RhythmAnalysisResult nativeResult;
+                var result = RunPythonScript(audioFilePath);
                 
-                int success = AnalyzeRhythmFromSamples(audioSamples, audioSamples.Length, sampleRate, out nativeResult);
-                if (success == 0)
-                {
-                    _logger.LogWarning("Не удалось проанализировать аудиосэмплы");
-                    return CreateErrorJson("Не удалось проанализировать аудиосэмплы");
-                }
-
-                var analysis = ConvertToManagedResult(nativeResult);
+                _logger.LogDebug("Анализ аудио завершен, результат: {Result}", result);
                 
-                // Освобождение памяти
-                FreeRhythmResult(ref nativeResult);
-                
-                _logger.LogInformation("Анализ аудио завершен. BPM: {Bpm}, Confidence: {Confidence}, Beats: {Beats}", 
-                    analysis.tempo_bpm, analysis.confidence, analysis.beats_detected);
-                
-                var audioAnalysisJson = new
-                {
-                    sample_rate = sampleRate,
-                    sample_count = audioSamples.Length,
-                    audio_analysis = analysis
-                };
-
-                return JsonConvert.SerializeObject(audioAnalysisJson, Formatting.Indented);
+                return result;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка при анализе аудиосэмплов");
-                return CreateErrorJson($"Ошибка анализа: {ex.Message}");
+                _logger.LogError(ex, "Ошибка при анализе аудио файла: {AudioFilePath}", audioFilePath);
+                throw;
             }
         }
 
-        private AudioAnalysis ConvertToManagedResult(RhythmAnalysisResult nativeResult)
+        private string RunPythonScript(string argument)
         {
-            var analysis = new AudioAnalysis
+            var startInfo = new ProcessStartInfo
             {
-                tempo_bpm = nativeResult.bpm,
-                confidence = nativeResult.confidence,
-                beats_detected = nativeResult.beat_count
+                FileName = "python3",
+                Arguments = $"{_pythonScriptPath} {argument}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
             };
 
-            // Копирование массива временных меток битов
-            if (nativeResult.beat_count > 0 && nativeResult.beat_timestamps != IntPtr.Zero)
+            using var process = Process.Start(startInfo);
+            if (process == null)
             {
-                analysis.beat_timestamps_sec = new float[nativeResult.beat_count];
-                Marshal.Copy(nativeResult.beat_timestamps, analysis.beat_timestamps_sec, 0, nativeResult.beat_count);
+                throw new InvalidOperationException("Не удалось запустить Python процесс");
             }
 
-            // Копирование интервалов BPM
-            if (nativeResult.interval_count > 0 && nativeResult.bpm_intervals != IntPtr.Zero)
-            {
-                analysis.bpm_intervals = new float[nativeResult.interval_count];
-                Marshal.Copy(nativeResult.bpm_intervals, analysis.bpm_intervals, 0, nativeResult.interval_count);
-            }
-
-            // Вычисление регулярности ритма
-            analysis.rhythm_regularity = CalculateRhythmRegularity(analysis.beat_timestamps_sec);
-
-            return analysis;
-        }
-
-        private double CalculateRhythmRegularity(float[] beatTimestamps)
-        {
-            if (beatTimestamps.Length < 2) return 0.0;
-
-            // Вычисление интервалов между битами
-            var intervals = new double[beatTimestamps.Length - 1];
-            for (int i = 1; i < beatTimestamps.Length; i++)
-            {
-                intervals[i - 1] = beatTimestamps[i] - beatTimestamps[i - 1];
-            }
-
-            // Вычисление стандартного отклонения
-            double mean = 0;
-            foreach (var interval in intervals)
-            {
-                mean += interval;
-            }
-            mean /= intervals.Length;
-
-            double variance = 0;
-            foreach (var interval in intervals)
-            {
-                variance += Math.Pow(interval - mean, 2);
-            }
-            variance /= intervals.Length;
-
-            double stdDev = Math.Sqrt(variance);
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
             
-            // Регулярность как обратная величина коэффициента вариации
-            if (mean == 0) return 0.0;
-            
-            double coeffVar = stdDev / mean;
-            return Math.Max(0.0, Math.Min(1.0, 1.0 - coeffVar));
-        }
+            process.WaitForExit();
 
-        private string CreateErrorJson(string message)
-        {
-            return JsonConvert.SerializeObject(new { error = message }, Formatting.Indented);
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Python скрипт завершился с ошибкой: {error}");
+            }
+
+            if (!string.IsNullOrEmpty(error))
+            {
+                _logger.LogWarning("Python предупреждения: {Error}", error);
+            }
+
+            return output.Trim();
         }
 
         public void Dispose()
         {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
+            if (_disposed) return;
 
-        protected virtual void Dispose(bool disposing)
-        {
-            if (!_disposed)
+            try
             {
-                if (_initialized)
+                // Удаляем только временный Python скрипт (не из основной директории)
+                if (File.Exists(_pythonScriptPath) && _pythonScriptPath.Contains(Path.GetTempPath()))
                 {
-                    try
-                    {
-                        ShutdownEssentia();
-                        _logger.LogInformation("AudioAnalyzer корректно завершен");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Ошибка при завершении работы AudioAnalyzer");
-                    }
-                    _initialized = false;
+                    File.Delete(_pythonScriptPath);
                 }
+                
+                _logger.LogInformation("AudioAnalyzer ресурсы освобождены");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Ошибка при освобождении ресурсов AudioAnalyzer");
+            }
+            finally
+            {
                 _disposed = true;
             }
-        }
-
-        ~AudioAnalyzer()
-        {
-            Dispose(false);
         }
     }
 } 

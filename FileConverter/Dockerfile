@@ -3,19 +3,9 @@ WORKDIR /app
 EXPOSE 5080
 EXPOSE 443
 
-# Установка FFmpeg и зависимостей для Essentia
-RUN apt-get update && \
-    apt-get install -y software-properties-common && \
-    apt-get install -y ffmpeg curl \
-    libfftw3-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libswresample-dev \
-    libtag1-dev \
-    libyaml-cpp-dev && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Стадия сборки Essentia
+FROM ghcr.io/mtg/essentia:latest AS essentia-stage
+# Этот образ уже содержит скомпилированную Essentia со всеми зависимостями
 
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
@@ -31,12 +21,34 @@ RUN dotnet publish "FileConverter.csproj" -c Release -o /app/publish /p:UseAppHo
 
 FROM base AS final
 WORKDIR /app
+
+# Установка необходимых пакетов для Python и Essentia
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ffmpeg \
+    curl \
+    libfftw3-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswresample-dev \
+    libtag1-dev \
+    libyaml-cpp-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Установка Essentia через pip
+RUN python3 -m pip install --no-cache-dir essentia
+
 COPY --from=publish /app/publish .
 
-# Копируем библиотеки Essentia (предполагаем, что они предварительно скомпилированы)
-# В production среде эти файлы должны быть предварительно собраны
-# COPY ./libs/libEssentiaWrapper.so /app/
-# COPY ./libs/libessentia.so* /app/
+# Копируем Python скрипт для анализа аудио
+COPY Scripts/essentia_analyzer.py /app/Scripts/essentia_analyzer.py
+RUN chmod +x /app/Scripts/essentia_analyzer.py
 
 # Создание директорий для временных файлов и логов
 RUN mkdir -p /app/Temp /app/Logs /app/wwwroot/mp3
@@ -47,7 +59,7 @@ RUN mkdir -p /tmp/FileConverter/Temp && chmod -R 777 /tmp/FileConverter
 # Установка переменных среды
 ENV ASPNETCORE_ENVIRONMENT=Production
 ENV ASPNETCORE_URLS=http://+:5080
-ENV LD_LIBRARY_PATH=/app
+ENV PYTHONPATH=/usr/local/lib/python3.11/dist-packages
 
 # Добавление пользователя для работы приложения
 RUN adduser --disabled-password --gecos "" appuser
