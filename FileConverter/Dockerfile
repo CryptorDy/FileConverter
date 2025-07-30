@@ -5,14 +5,15 @@ EXPOSE 443
 
 # Установка FFmpeg и зависимостей для Essentia
 RUN apt-get update && \
+    apt-get install -y software-properties-common && \
     apt-get install -y ffmpeg curl \
-    libfftw3-3 \
-    libavcodec58 \
-    libavformat58 \
-    libavutil56 \
-    libswresample3 \
-    libtag1v5 \
-    libyaml-cpp0.7 && \
+    libfftw3-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswresample-dev \
+    libtag1-dev \
+    libyaml-cpp-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
