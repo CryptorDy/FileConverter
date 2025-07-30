@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using System.Collections.Generic;
 using System.Linq;
+using Polly;
 
 namespace FileConverter.Services.BackgroundServices
 {
@@ -272,30 +273,15 @@ namespace FileConverter.Services.BackgroundServices
             const int maxRetries = 3;
             var baseDelay = TimeSpan.FromSeconds(1);
             
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                try
-                {
-                    return await storageService.UploadFileAsync(filePath, contentType);
-                }
-                catch (Exception ex) when (attempt < maxRetries)
-                {
-                    var delay = TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1));
-                    logger.LogWarning("Задача {JobId}: Попытка {Attempt}/{MaxRetries} загрузки {FilePath} неудачна. Повтор через {Delay}мс. Ошибка: {Error}", 
-                        jobId, attempt, maxRetries, Path.GetFileName(filePath), delay.TotalMilliseconds, ex.Message);
-                    
-                    await Task.Delay(delay);
-                }
-                catch (Exception ex) when (attempt == maxRetries)
-                {
-                    logger.LogError(ex, "Задача {JobId}: Все {MaxRetries} попытки загрузки {FilePath} неудачны", 
-                        jobId, maxRetries, Path.GetFileName(filePath));
-                    throw;
-                }
-            }
-            
-            // Этот код никогда не должен выполниться
-            throw new InvalidOperationException("Неожиданное завершение retry логики");
+            return await Policy
+                .Handle<Exception>()
+                .WaitAndRetryAsync(maxRetries, attempt => TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1)),
+                    (exception, timeSpan, retryCount, context) =>
+                    {
+                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/{MaxRetries} загрузки {FilePath} неудачна. Повтор через {Delay}мс. Ошибка: {Error}", 
+                            jobId, retryCount, maxRetries, Path.GetFileName(filePath), timeSpan.TotalMilliseconds, exception.Message);
+                    })
+                .ExecuteAsync(() => storageService.UploadFileAsync(filePath, contentType));
         }
     }
 } 

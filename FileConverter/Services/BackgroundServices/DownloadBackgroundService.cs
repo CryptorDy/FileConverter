@@ -11,6 +11,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using Polly;
+using Polly.Extensions.Http;
 
 namespace FileConverter.Services.BackgroundServices
 {
@@ -137,10 +139,33 @@ namespace FileConverter.Services.BackgroundServices
                         {
                             sourceDescription = $"URL ({ (IsInstagramUrl(videoUrl) ? "instagram-downloader" : "default") })";
                             logger.LogInformation("Задача {JobId}: скачивание из {SourceDescription}: {VideoUrl}", jobId, sourceDescription, videoUrl);
-                            try
+                            
+                            // Настройка Polly retry policy
+                            var retryPolicy = Policy
+                                .Handle<Exception>(ex => !(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+                                .WaitAndRetryAsync(
+                                    retryCount: 3,
+                                    sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 2, 4, 8 секунд
+                                    onRetry: (outcome, timespan, retryCount, context) =>
+                                    {
+                                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/3 загрузки неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
+                                            jobId, retryCount, timespan.TotalSeconds, outcome.Exception?.Message ?? "Unknown");
+                                        
+                                        // Очищаем частично загруженный файл перед повтором
+                                        if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
+                                        {
+                                            try { File.Delete(videoPath); logger.LogDebug("Удален частично загруженный файл: {VideoPath}", videoPath); } 
+                                            catch (Exception cleanupEx) { logger.LogWarning("Не удалось удалить файл {VideoPath}: {Error}", videoPath, cleanupEx.Message); }
+                                            videoPath = string.Empty;
+                                        }
+                                    });
+
+                            // Выполняем загрузку с retry
+                            await retryPolicy.ExecuteAsync(async () =>
                             {
+                                logger.LogInformation("Задача {JobId}: начинаем попытку загрузки", jobId);
+                                
                                 using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
-                                // Используем CancellationToken для возможности отмены запроса
                                 using var response = await instagramHttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
 
                                 if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
@@ -215,19 +240,9 @@ namespace FileConverter.Services.BackgroundServices
                                 
                                 // Читаем файл для вычисления хеша
                                 fileData = await File.ReadAllBytesAsync(videoPath, stoppingToken);
-                            }
-                            catch (HttpRequestException httpEx)
-                            {
-                                if (httpEx.Message.Contains("403"))
-                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL требует авторизации: {videoUrl}", httpEx);
-                                else
-                                    throw new InvalidOperationException($"HTTP ошибка при скачивании: {httpEx.Message}", httpEx);
-                            }
-                            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                            {
-                                logger.LogInformation("Операция скачивания для задачи {JobId} отменена.", jobId);
-                                throw; // Повторно выбрасываем исключение для корректной обработки отмены
-                            }
+                                
+                                logger.LogInformation("Задача {JobId}: успешная загрузка файла", jobId);
+                            });
                         }
                             await conversionLogger.LogDownloadCompletedAsync(jobId, fileData.Length, videoPath);
 
