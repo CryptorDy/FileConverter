@@ -162,8 +162,8 @@ namespace FileConverter.Services
                         // Добавляем подробное логгирование сырого JSON-ответа
                         logger.LogInformation("Задача {JobId}: Получен сырой JSON от Essentia: {RawJson}", jobId, analysisJsonResult);
 
-                        // Безопасная десериализация с типизированной моделью
-                        var analysisResponse = JsonConvert.DeserializeObject<EssentiaAnalysisResponse>(analysisJsonResult);
+                        // Безопасная десериализация с использованием System.Text.Json
+                        var analysisResponse = System.Text.Json.JsonSerializer.Deserialize<EssentiaAnalysisResponse>(analysisJsonResult);
                         
                         // Проверяем, не вернул ли Python-скрипт ошибку
                         if (!string.IsNullOrEmpty(analysisResponse?.Error))
