@@ -22,7 +22,7 @@ RUN dotnet publish "FileConverter.csproj" -c Release -o /app/publish /p:UseAppHo
 FROM base AS final
 WORKDIR /app
 
-# Установка необходимых пакетов для Python и Essentia
+# Установка необходимых пакетов и Python зависимостей
 RUN apt-get update && \
     apt-get install -y software-properties-common && \
     apt-get install -y \
@@ -30,28 +30,29 @@ RUN apt-get update && \
     python3-pip \
     python3-venv \
     python3-dev \
-    python3-numpy \
-    python3-scipy \
     ffmpeg \
     curl \
+    build-essential \
+    pkg-config \
     libfftw3-dev \
     libavcodec-dev \
     libavformat-dev \
     libavutil-dev \
     libswresample-dev \
     libtag1-dev \
-    libyaml-cpp-dev \
-    pkg-config \
-    build-essential && \
+    libyaml-cpp-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Установка Essentia через pip с несколькими fallback вариантами
-RUN python3 -m pip install --no-cache-dir --break-system-packages essentia || \
-    (python3 -m venv /opt/venv && \
-     /opt/venv/bin/pip install --no-cache-dir essentia && \
-     ln -sf /opt/venv/bin/python3 /usr/local/bin/python3-essentia) || \
+# Создаем виртуальное окружение и устанавливаем Essentia
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir numpy scipy pyyaml && \
+    /opt/venv/bin/pip install --no-cache-dir essentia || \
     echo "ВНИМАНИЕ: Essentia не установлена, анализ аудио будет пропущен"
+
+# Создаем symlink для удобства
+RUN ln -sf /opt/venv/bin/python3 /usr/local/bin/python3-essentia
 
 COPY --from=publish /app/publish .
 

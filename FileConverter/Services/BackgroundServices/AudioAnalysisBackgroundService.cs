@@ -159,16 +159,17 @@ namespace FileConverter.Services
                         // Безопасная десериализация с типизированной моделью
                         var analysisResponse = JsonConvert.DeserializeObject<EssentiaAnalysisResponse>(analysisJsonResult);
                         
+                        // Проверяем, не вернул ли Python-скрипт ошибку
+                        if (!string.IsNullOrEmpty(analysisResponse?.Error))
+                        {
+                            throw new InvalidOperationException($"Ошибка в Python-скрипте Essentia: {analysisResponse.Error}");
+                        }
+                        
                         if (analysisResponse == null)
                         {
                             throw new InvalidOperationException("Не удалось десериализовать ответ Essentia");
                         }
                         
-                        if (!string.IsNullOrEmpty(analysisResponse.Error))
-                        {
-                            throw new InvalidOperationException($"Ошибка анализа аудио: {analysisResponse.Error}");
-                        }
-
                         if (analysisResponse.AudioAnalysis == null)
                         {
                             throw new InvalidOperationException("Результат анализа аудио не содержит данных audio_analysis");
