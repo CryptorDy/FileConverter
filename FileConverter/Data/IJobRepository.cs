@@ -47,5 +47,19 @@ namespace FileConverter.Data
         /// <param name="statuses">Список статусов для подсчета</param>
         /// <returns>Количество заданий</returns>
         Task<int> GetJobsByStatusesCountAsync(ConversionStatus[] statuses);
+        
+        /// <summary>
+        /// Атомарно проверяет статус задачи и обновляет его если он соответствует ожидаемому
+        /// </summary>
+        /// <param name="jobId">ID задачи</param>
+        /// <param name="expectedStatus">Ожидаемый статус для обновления</param>
+        /// <param name="newStatus">Новый статус</param>
+        /// <returns>true если статус был обновлен, false если статус не соответствует ожидаемому</returns>
+        Task<bool> TryUpdateJobStatusIfAsync(string jobId, ConversionStatus expectedStatus, ConversionStatus newStatus);
+        
+        /// <summary>
+        /// Обновляет данные анализа аудио для задачи
+        /// </summary>
+        Task UpdateJobAudioAnalysisAsync(string jobId, AudioAnalysisData audioAnalysis);
     }
 } 

@@ -52,6 +52,12 @@ namespace FileConverter.Models
         /// Длительность видео в секундах
         /// </summary>
         public double? DurationSeconds { get; set; }
+        
+        /// <summary>
+        /// Результат анализа аудиодорожки
+        /// </summary>
+        [Column(TypeName = "jsonb")]
+        public AudioAnalysisData? AudioAnalysis { get; set; }
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -60,6 +66,8 @@ namespace FileConverter.Models
         Pending,
         Downloading,
         Converting,
+        AudioAnalyzing,    // Новый статус для анализа аудио
+        ExtractingKeyframes, // Новый статус для извлечения кадров
         Uploading,
         Completed,
         Failed

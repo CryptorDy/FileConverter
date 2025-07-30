@@ -38,4 +38,10 @@
     <Folder Include="wwwroot\mp3\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Scripts\essentia_analyzer.py">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

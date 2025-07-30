@@ -22,17 +22,20 @@ namespace FileConverter.Services
         private readonly ILogger<ConversionBackgroundService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
+        private readonly MetricsCollector _metricsCollector;
         private readonly int _maxConcurrentConversions;
 
         public ConversionBackgroundService(
             ILogger<ConversionBackgroundService> logger,
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
+            MetricsCollector metricsCollector,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
+            _metricsCollector = metricsCollector;
             // Максимальное количество параллельных конвертаций, не больше чем ядер CPU - 1 (минимум 1)
             _maxConcurrentConversions = configuration.GetValue<int>("Performance:MaxConcurrentConversions", Math.Max(1, Environment.ProcessorCount - 1));
              _logger.LogInformation("ConversionBackgroundService инициализирован с {MaxConcurrentConversions} параллельными конвертациями.", _maxConcurrentConversions);
@@ -113,6 +116,9 @@ namespace FileConverter.Services
 
                             await conversionLogger.LogConversionStartedAsync(jobId, queueTimeMs, $"Хеш видео: {videoHash}");
 
+                            // Запускаем таймер для метрик конвертации
+                            _metricsCollector.StartTimer("conversion_video_to_mp3", jobId);
+
                             // Обновляем статус на Converting
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Converting);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Converting);
@@ -147,17 +153,32 @@ namespace FileConverter.Services
                             await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Запуск FFmpeg: {conversion.Build()}");
                             logger.LogInformation("Задача {JobId}: запуск конвертации FFmpeg...", jobId);
 
-                            // Обработка прогресса
+                            // Обработка прогресса с throttling
+                            DateTime lastLogTime = DateTime.MinValue;
+                            double lastLoggedPercent = -1;
                             conversion.OnProgress += async (sender, args) => {
-                                // Логируем прогресс, но не слишком часто, чтобы не засорять логи
-                                // Например, каждые 5% или каждые 10 секунд (что наступит позже)
-                                // Здесь для простоты оставим логирование каждого события, но в проде может потребоваться троттлинг
-                                await conversionLogger.LogConversionProgressAsync(jobId, args.Percent, args.TotalLength.TotalSeconds - args.Duration.TotalSeconds);
-                                // logger.LogTrace("Задача {JobId}: прогресс конвертации {Percent}%", jobId, args.Percent);
+                                var now = DateTime.UtcNow;
+                                var percentDiff = Math.Abs(args.Percent - lastLoggedPercent);
+                                var timeDiff = (now - lastLogTime).TotalSeconds;
+                                
+                                // Логируем только если прошло 10 секунд ИЛИ прогресс изменился на 5%+
+                                if (timeDiff >= 10 || percentDiff >= 5 || args.Percent >= 99)
+                                {
+                                    await conversionLogger.LogConversionProgressAsync(jobId, args.Percent, args.TotalLength.TotalSeconds - args.Duration.TotalSeconds);
+                                    lastLogTime = now;
+                                    lastLoggedPercent = args.Percent;
+                                    logger.LogTrace("Задача {JobId}: прогресс конвертации {Percent:F1}%", jobId, args.Percent);
+                                }
                             };
 
-                            // Запускаем конвертацию с CancellationToken
-                            IConversionResult result = await conversion.Start(stoppingToken);
+                            // Запускаем конвертацию с тайм-аутом
+                            using var timeoutCts = new CancellationTokenSource();
+                            using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
+                            
+                            // Устанавливаем тайм-аут 30 минут для конвертации
+                            timeoutCts.CancelAfter(TimeSpan.FromMinutes(30));
+                            
+                            IConversionResult result = await conversion.Start(combinedCts.Token);
                             
                             logger.LogInformation("Задача {JobId}: конвертация FFmpeg завершена.", jobId);
                             await conversionLogger.LogSystemInfoAsync($"Конвертация завершена для задания {jobId}");
@@ -173,11 +194,25 @@ namespace FileConverter.Services
                             await conversionLogger.LogConversionCompletedAsync(jobId, mp3FileSize, mediaInfo.Duration.TotalSeconds, mp3Path);
                              logger.LogInformation("Задача {JobId}: конвертация успешно завершена. MP3 файл: {Mp3Path}, Размер: {FileSize} байт", jobId, mp3Path, mp3FileSize);
 
+                            // Останавливаем таймер для метрик (успешная конвертация)
+                            _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: true);
 
-                            // Помещаем задачу в очередь извлечения ключевых кадров
-                            await _channels.KeyframeExtractionChannel.Writer.WriteAsync((jobId, videoPath, mp3Path, videoHash), stoppingToken);
-                            logger.LogInformation("Задача {JobId}: передана в очередь извлечения ключевых кадров (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
-                             await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на извлечение ключевых кадров");
+                            // Помещаем задачу в очередь анализа аудио
+                            bool audioAnalysisQueueSuccess = _channels.AudioAnalysisChannel.Writer.TryWrite((jobId, mp3Path, videoPath, videoHash));
+                            if (audioAnalysisQueueSuccess)
+                            {
+                                logger.LogInformation("Задача {JobId}: передана в очередь анализа аудио (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
+                                await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на анализ аудио");
+                            }
+                            else
+                            {
+                                logger.LogWarning("Задача {JobId}: очередь анализа аудио переполнена, файлы будут очищены", jobId);
+                                await conversionLogger.LogErrorAsync(jobId, "Очередь анализа аудио переполнена", null, ConversionStatus.Failed);
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Очередь анализа аудио переполнена");
+                                // Очищаем временные файлы, так как они не будут обработаны
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                                CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            }
 
                             // НЕ удаляем файлы videoPath и mp3Path здесь, они нужны для извлечения кадров и загрузки
 
@@ -189,9 +224,27 @@ namespace FileConverter.Services
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
                             CleanupFile(tempFileManager, mp3Path, logger, jobId);
                         }
+                        catch (OperationCanceledException)
+                        {
+                            // Тайм-аут конвертации
+                            logger.LogError("Задача {JobId}: Превышен тайм-аут конвертации (30 минут).", jobId);
+                            
+                            // Останавливаем таймер для метрик (тайм-аут конвертации)
+                            _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: false);
+                            
+                            await conversionLogger.LogErrorAsync(jobId, "Превышен тайм-аут конвертации (30 минут)", null, ConversionStatus.Failed);
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Тайм-аут конвертации");
+                            // Очищаем временные файлы
+                            CleanupFile(tempFileManager, videoPath, logger, jobId);
+                            CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                        }
                         catch (Exception ex)
                         {
                             logger.LogError(ex, "Задача {JobId}: Ошибка на этапе конвертации.", jobId);
+                            
+                            // Останавливаем таймер для метрик (неуспешная конвертация)
+                            _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: false);
+                            
                             await conversionLogger.LogErrorAsync(jobId, $"Ошибка при конвертации видео: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка конвертации: {ex.Message}");
                             // Очищаем временные файлы

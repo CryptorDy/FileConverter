@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Xabe.FFmpeg;
 
-namespace FileConverter.Services
+namespace FileConverter.Services.BackgroundServices
 {
     /// <summary>
     /// Фоновый сервис для извлечения ключевых кадров из видео из очереди KeyframeExtractionChannel.
@@ -35,9 +35,9 @@ namespace FileConverter.Services
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
-            _maxConcurrentExtractions = configuration.GetValue<int>("Performance:MaxConcurrentKeyframeExtractions", Math.Max(1, Environment.ProcessorCount - 1));
-            _keyframeCount = configuration.GetValue<int>("KeyframeExtraction:FrameCount", 10);
-            _keyframeQuality = configuration.GetValue<int>("KeyframeExtraction:Quality", 2); // 1-31, где 1 - лучшее качество
+            _maxConcurrentExtractions = configuration.GetValue("Performance:MaxConcurrentKeyframeExtractions", Math.Max(1, Environment.ProcessorCount - 1));
+            _keyframeCount = configuration.GetValue("KeyframeExtraction:FrameCount", 10);
+            _keyframeQuality = configuration.GetValue("KeyframeExtraction:Quality", 2); // 1-31, где 1 - лучшее качество
             _logger.LogInformation("KeyframeExtractionBackgroundService инициализирован с {MaxConcurrentExtractions} параллельными извлечениями, {FrameCount} кадров, качество {Quality}.", 
                 _maxConcurrentExtractions, _keyframeCount, _keyframeQuality);
         }
@@ -120,8 +120,9 @@ namespace FileConverter.Services
 
                             await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: начало извлечения ключевых кадров. Время в очереди: {queueTimeMs} мс");
 
-                            // Обновляем статус (можно добавить новый статус KeyframeExtracting, но пока используем Converting)
-                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Converting);
+                            // Обновляем статус на ExtractingKeyframes
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.ExtractingKeyframes);
+                            await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.ExtractingKeyframes);
 
                             // Получаем информацию о видеофайле
                             logger.LogDebug("Задача {JobId}: получение информации о видеофайле {VideoPath}", jobId, videoPath);
@@ -149,9 +150,22 @@ namespace FileConverter.Services
                             logger.LogInformation("Задача {JobId}: извлечено {FrameCount} ключевых кадров", jobId, keyframeInfos.Count);
 
                             // Передаем задачу в очередь загрузки с путями к файлам кадров
-                            await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoPath, videoHash, keyframeInfos), stoppingToken);
-                            logger.LogInformation("Задача {JobId}: передана в очередь загрузки с {FrameCount} ключевыми кадрами", jobId, keyframeInfos.Count);
-                            await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку с {keyframeInfos.Count} ключевыми кадрами");
+                            bool uploadQueueSuccess = _channels.UploadChannel.Writer.TryWrite((jobId, mp3Path, videoPath, videoHash, keyframeInfos));
+                            if (uploadQueueSuccess)
+                            {
+                                logger.LogInformation("Задача {JobId}: передана в очередь загрузки с {FrameCount} ключевыми кадрами", jobId, keyframeInfos.Count);
+                                await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку с {keyframeInfos.Count} ключевыми кадрами");
+                            }
+                            else
+                            {
+                                logger.LogWarning("Задача {JobId}: очередь загрузки переполнена, файлы будут очищены", jobId);
+                                await conversionLogger.LogErrorAsync(jobId, "Очередь загрузки переполнена", null, ConversionStatus.Failed);
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Очередь загрузки переполнена");
+                                // Очищаем все временные файлы, так как они не будут загружены
+                                CleanupFiles(tempFileManager, keyframeInfos?.Select(k => Path.GetFileName(k.Url)).ToList() ?? new List<string>(), logger, jobId);
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                                CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            }
 
                             // НЕ удаляем файлы videoPath, mp3Path и keyframePaths здесь, они нужны для загрузки
                         }
@@ -214,35 +228,56 @@ namespace FileConverter.Services
 
                 await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: извлечение кадра {i}/{_keyframeCount} в позиции {timePosition:hh\\:mm\\:ss}");
                 
-                try
+                // Retry логика для извлечения кадра
+                bool frameExtracted = false;
+                int maxRetries = 2; // Максимум 2 повторных попытки
+                
+                for (int attempt = 1; attempt <= maxRetries && !frameExtracted; attempt++)
                 {
-                    await conversion.Start(stoppingToken);
-                    
-                    if (File.Exists(outputPath))
+                    try
                     {
-                        // Создаем KeyframeInfo с таймкодом
-                        var keyframeInfo = new KeyframeInfo
+                        if (attempt > 1)
                         {
-                            Url = outputPath, // Пока временный путь, URL будет заполнен после загрузки
-                            Timestamp = timePosition,
-                            FrameNumber = i
-                        };
+                            // Если это повторная попытка, добавляем небольшую задержку
+                            await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), stoppingToken);
+                            logger.LogInformation("Задача {JobId}: повторная попытка {Attempt}/{MaxRetries} извлечения кадра {FrameNumber}", 
+                                jobId, attempt, maxRetries, i);
+                        }
                         
-                        keyframeInfos.Add(keyframeInfo);
-                        logger.LogDebug("Задача {JobId}: кадр {FrameNumber} успешно извлечен в позиции {TimePosition}: {OutputPath}", 
-                            jobId, i, timePosition, outputPath);
+                        await conversion.Start(stoppingToken);
+                        
+                        if (File.Exists(outputPath))
+                        {
+                            // Создаем KeyframeInfo с таймкодом
+                            var keyframeInfo = new KeyframeInfo
+                            {
+                                Url = outputPath, // Пока временный путь, URL будет заполнен после загрузки
+                                Timestamp = timePosition,
+                                FrameNumber = i
+                            };
+                            
+                            keyframeInfos.Add(keyframeInfo);
+                            logger.LogDebug("Задача {JobId}: кадр {FrameNumber} успешно извлечен в позиции {TimePosition}: {OutputPath} (попытка {Attempt})", 
+                                jobId, i, timePosition, outputPath, attempt);
+                            frameExtracted = true;
+                        }
+                        else
+                        {
+                            logger.LogWarning("Задача {JobId}: файл кадра не создан в позиции {TimePosition} (попытка {Attempt})", 
+                                jobId, timePosition, attempt);
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        logger.LogWarning("Задача {JobId}: не удалось извлечь кадр {FrameNumber} в позиции {TimePosition}", 
-                            jobId, i, timePosition);
+                        logger.LogError(ex, "Задача {JobId}: ошибка при извлечении кадра {FrameNumber} в позиции {TimePosition} (попытка {Attempt})", 
+                            jobId, i, timePosition, attempt);
+                        
+                        if (attempt == maxRetries)
+                        {
+                            logger.LogError("Задача {JobId}: не удалось извлечь кадр {FrameNumber} после {MaxRetries} попыток", 
+                                jobId, i, maxRetries);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Задача {JobId}: ошибка при извлечении кадра {FrameNumber} в позиции {TimePosition}", 
-                        jobId, i, timePosition);
-                    // Продолжаем с следующим кадром, не прерываем весь процесс
                 }
             }
             

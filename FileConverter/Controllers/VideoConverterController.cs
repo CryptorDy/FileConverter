@@ -34,6 +34,13 @@ namespace FileConverter.Controllers
                     return BadRequest("Необходимо указать хотя бы один URL видео для конвертации");
                 }
 
+                // Ограничиваем размер пакета для предотвращения перегрузки системы
+                const int maxBatchSize = 100; // Максимум 50 URL за раз
+                if (request.VideoUrls.Count > maxBatchSize)
+                {
+                    return BadRequest($"Слишком много URL в запросе. Максимум {maxBatchSize} URL за раз. Получено: {request.VideoUrls.Count}");
+                }
+
                 _logger.LogInformation($"Conversion request received {request.VideoUrls.Count}");
                 
                 // Получаем результат создания пакета задач

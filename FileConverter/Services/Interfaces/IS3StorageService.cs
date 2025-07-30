@@ -33,5 +33,12 @@ namespace FileConverter.Services
         /// <param name="url">URL файла для удаления</param>
         /// <returns>true, если файл успешно удален</returns>
         Task<bool> DeleteFileAsync(string url);
+        
+        /// <summary>
+        /// Пытается скачать файл по URL если он существует
+        /// </summary>
+        /// <param name="url">URL файла</param>
+        /// <returns>Содержимое файла или null если файл не существует</returns>
+        Task<byte[]?> TryDownloadFileAsync(string url);
     }
 } 

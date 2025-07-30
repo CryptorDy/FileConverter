@@ -12,7 +12,7 @@ using Microsoft.Extensions.Configuration;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace FileConverter.Services
+namespace FileConverter.Services.BackgroundServices
 {
     /// <summary>
     /// Фоновый сервис для загрузки готовых MP3 и видео в S3 из очереди UploadChannel.
@@ -22,18 +22,21 @@ namespace FileConverter.Services
         private readonly ILogger<UploadBackgroundService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
+        private readonly MetricsCollector _metricsCollector;
         private readonly int _maxConcurrentUploads;
 
         public UploadBackgroundService(
             ILogger<UploadBackgroundService> logger,
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
+            MetricsCollector metricsCollector,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
-             _maxConcurrentUploads = configuration.GetValue<int>("Performance:MaxConcurrentUploads", 5); 
+            _metricsCollector = metricsCollector;
+             _maxConcurrentUploads = configuration.GetValue("Performance:MaxConcurrentUploads", 5); 
              _logger.LogInformation("UploadBackgroundService инициализирован с {MaxConcurrentUploads} параллельными загрузками.", _maxConcurrentUploads);
         }
 
@@ -111,23 +114,31 @@ namespace FileConverter.Services
 
                             await conversionLogger.LogUploadStartedAsync(jobId, queueTimeMs, mp3FileSize);
 
+                            // Запускаем таймер для метрик загрузки
+                            _metricsCollector.StartTimer("upload_files", jobId);
+
                             // Обновляем статус на Uploading
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Uploading);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Uploading);
                             
                             logger.LogInformation("Задача {JobId}: начало загрузки файлов в S3...", jobId);
 
-                            // Параллельно загружаем видео, MP3 и ключевые кадры в S3
-                            var videoUploadTask = storageService.UploadFileAsync(videoPath, "video/mp4");
-                            var mp3UploadTask = storageService.UploadFileAsync(mp3Path, "audio/mpeg");
-                            var keyframesUploadTasks = keyframeInfos.Select(k => storageService.UploadFileAsync(k.Url, "image/jpeg")).ToList();
+                            // Параллельно загружаем видео, MP3 и ключевые кадры в S3 с retry логикой
+                            var videoUploadTask = UploadWithRetryAsync(storageService, videoPath, "video/mp4", logger, jobId);
+                            var mp3UploadTask = UploadWithRetryAsync(storageService, mp3Path, "audio/mpeg", logger, jobId);
+                            var keyframesUploadTasks = keyframeInfos.Select(k => UploadWithRetryAsync(storageService, k.Url, "image/jpeg", logger, jobId)).ToList();
 
-                            // Ожидаем завершения всех задач загрузки
-                            await Task.WhenAll(videoUploadTask, mp3UploadTask); // Основные файлы
-                            var keyframeUrls = (await Task.WhenAll(keyframesUploadTasks)).ToList(); // Кадры
+                            // Объединяем все загрузки в одну группу для оптимальной параллельной обработки
+                            var allUploadTasks = new List<Task<string>> { videoUploadTask, mp3UploadTask };
+                            allUploadTasks.AddRange(keyframesUploadTasks);
                             
-                            var videoUrl = await videoUploadTask; // URL видео в S3
-                            var mp3Url = await mp3UploadTask;   // URL MP3 в S3
+                            // Ожидаем завершения всех задач загрузки одновременно
+                            var allUrls = await Task.WhenAll(allUploadTasks);
+                            
+                            // Разбираем результаты
+                            var videoUrl = allUrls[0]; // URL видео в S3
+                            var mp3Url = allUrls[1]; // URL MP3 в S3
+                            var keyframeUrls = allUrls.Skip(2).ToList(); // URLs ключевых кадров
                             
                             // Обновляем URL-ы в keyframeInfos после загрузки
                             for (int i = 0; i < keyframeInfos.Count && i < keyframeUrls.Count; i++)
@@ -148,7 +159,8 @@ namespace FileConverter.Services
                                 AudioUrl = mp3Url,
                                 Keyframes = keyframeInfos, // Добавляем информацию с таймкодами
                                 FileSizeBytes = job.FileSizeBytes ?? 0, // Берем размер из задачи
-                                DurationSeconds = job.DurationSeconds // Сохраняем длительность видео
+                                DurationSeconds = job.DurationSeconds, // Сохраняем длительность видео
+                                AudioAnalysis = job.AudioAnalysis // Сохраняем данные анализа аудио для кэширования
                             };
                             
                             var savedItem = await mediaItemRepository.SaveItemAsync(mediaItem);
@@ -167,6 +179,9 @@ namespace FileConverter.Services
                             // Вычисляем общее время выполнения задачи
                             var totalTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds;
                             
+                            // Останавливаем таймер для метрик (успешная загрузка)
+                            _metricsCollector.StopTimer("upload_files", jobId, isSuccess: true);
+
                             await conversionLogger.LogJobCompletedAsync(jobId, mp3Url, totalTimeMs);
                             logger.LogInformation("Задача {JobId}: успешно завершена за {TotalTimeMs} мс.", jobId, totalTimeMs);
                              await conversionLogger.LogSystemInfoAsync($"Задание {jobId} успешно завершено");
@@ -182,6 +197,10 @@ namespace FileConverter.Services
                         catch (Exception ex)
                         {
                             logger.LogError(ex, "Задача {JobId}: Ошибка на этапе загрузки.", jobId);
+                            
+                            // Останавливаем таймер для метрик (неуспешная загрузка)
+                            _metricsCollector.StopTimer("upload_files", jobId, isSuccess: false);
+                            
                             await conversionLogger.LogErrorAsync(jobId, $"Ошибка при загрузке MP3: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка загрузки: {ex.Message}");
                        }
@@ -243,6 +262,40 @@ namespace FileConverter.Services
             // Дожидаемся завершения текущих загрузок? Сложно, т.к. UploadFileAsync может быть долгим.
             // Полагаемся на то, что S3 SDK обработает CancellationToken, если он там используется.
             return base.StopAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Загружает файл с retry логикой (3 попытки с экспоненциальным backoff)
+        /// </summary>
+        private static async Task<string> UploadWithRetryAsync(IS3StorageService storageService, string filePath, string contentType, ILogger logger, string jobId)
+        {
+            const int maxRetries = 3;
+            var baseDelay = TimeSpan.FromSeconds(1);
+            
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    return await storageService.UploadFileAsync(filePath, contentType);
+                }
+                catch (Exception ex) when (attempt < maxRetries)
+                {
+                    var delay = TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1));
+                    logger.LogWarning("Задача {JobId}: Попытка {Attempt}/{MaxRetries} загрузки {FilePath} неудачна. Повтор через {Delay}мс. Ошибка: {Error}", 
+                        jobId, attempt, maxRetries, Path.GetFileName(filePath), delay.TotalMilliseconds, ex.Message);
+                    
+                    await Task.Delay(delay);
+                }
+                catch (Exception ex) when (attempt == maxRetries)
+                {
+                    logger.LogError(ex, "Задача {JobId}: Все {MaxRetries} попытки загрузки {FilePath} неудачны", 
+                        jobId, maxRetries, Path.GetFileName(filePath));
+                    throw;
+                }
+            }
+            
+            // Этот код никогда не должен выполниться
+            throw new InvalidOperationException("Неожиданное завершение retry логики");
         }
     }
 } 

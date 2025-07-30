@@ -8,7 +8,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 
-namespace FileConverter.Services
+namespace FileConverter.Helpers
 {
     public class UrlValidator
     {
@@ -63,7 +63,7 @@ namespace FileConverter.Services
                 
                 // Check that URL is valid
                 if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || 
-                    (uri.Scheme != "http" && uri.Scheme != "https"))
+                    uri.Scheme != "http" && uri.Scheme != "https")
                 {
                     _logger.LogWarning($"Invalid URL: {url}");
                     return false;

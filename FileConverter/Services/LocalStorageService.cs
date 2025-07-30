@@ -225,5 +225,44 @@ namespace FileConverter.Services
                 return Task.FromResult(false);
             }
         }
+        
+        public Task<byte[]?> TryDownloadFileAsync(string url)
+        {
+            try
+            {
+                if (Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) && 
+                    (uri.Host.Contains("localhost") || uri.Host == "94.241.171.236"))
+                {
+                    string fileName = Path.GetFileName(uri.LocalPath);
+                    if (string.IsNullOrEmpty(fileName))
+                    {
+                        _logger.LogDebug("Invalid file name in URL: {Url}", url);
+                        return Task.FromResult<byte[]?>(null);
+                    }
+                    
+                    string filePath = Path.Combine(_storagePath, fileName);
+                    _logger.LogDebug("Trying to download file: {FilePath}", filePath);
+                    
+                    if (File.Exists(filePath))
+                    {
+                        var data = File.ReadAllBytes(filePath);
+                        return Task.FromResult<byte[]?>(data);
+                    }
+                    
+                    _logger.LogDebug("File not found: {FilePath}", filePath);
+                    return Task.FromResult<byte[]?>(null);
+                }
+                else
+                {
+                    _logger.LogDebug("URL is not local: {Url}", url);
+                    return Task.FromResult<byte[]?>(null);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error downloading file: {Url}", url);
+                return Task.FromResult<byte[]?>(null);
+            }
+        }
     }
 } 

@@ -6,24 +6,23 @@ using Microsoft.Extensions.Configuration;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Threading.Channels;
+
 using FileConverter.Services;
 
 namespace FileConverter.Services
 {
     /// <summary>
     /// Сервис для восстановления "застрявших" заданий.
-    /// Теперь добавляет восстановленные задачи напрямую в канал обработки.
+    /// Передает восстановленные задачи в VideoConverter для интеллектуальной обработки.
     /// </summary>
     public class JobRecoveryService : IJobRecoveryService
     {
         private readonly IJobRepository _jobRepository;
         private readonly IConversionLogRepository _logRepository;
-        private readonly ProcessingChannels _channels;
         private readonly ILogger<JobRecoveryService> _logger;
         private readonly IConversionLogger _conversionLogger;
         private readonly IConfiguration _configuration;
-        private readonly IYoutubeDownloadService _youtubeDownloadService;
+        private readonly IVideoConverter _videoConverter;
         
         // Настройки восстановления заданий
         private readonly int _staleJobThresholdMinutes;
@@ -35,19 +34,17 @@ namespace FileConverter.Services
         public JobRecoveryService(
             IJobRepository jobRepository,
             IConversionLogRepository logRepository,
-            ProcessingChannels channels,
             ILogger<JobRecoveryService> logger,
             IConversionLogger conversionLogger,
             IConfiguration configuration,
-            IYoutubeDownloadService youtubeDownloadService)
+            IVideoConverter videoConverter)
         {
             _jobRepository = jobRepository;
             _logRepository = logRepository;
-            _channels = channels;
             _logger = logger;
             _conversionLogger = conversionLogger;
             _configuration = configuration;
-            _youtubeDownloadService = youtubeDownloadService;
+            _videoConverter = videoConverter;
             
             // Загружаем настройки
             _staleJobThresholdMinutes = _configuration.GetValue<int>("Performance:StaleJobThresholdMinutes", 30);
@@ -158,35 +155,19 @@ namespace FileConverter.Services
             await _conversionLogger.LogJobRecoveredAsync(
                 job.Id, previousStatus, job.Status, reason);
             
-            // Повторно запускаем обработку НЕ через Hangfire, а добавляем в канал
+            // Повторно запускаем обработку через VideoConverter (с проверкой кэша и валидацией)
             try
             {
-                // Проверяем, является ли это YouTube видео
-                if (_youtubeDownloadService.IsYoutubeUrl(job.VideoUrl))
-                {
-                    await _channels.YoutubeDownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
-                    _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь YouTube скачивания.", job.Id);
-                    await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь YouTube скачивания.");
-                }
-                else
-                {
-                    await _channels.DownloadChannel.Writer.WriteAsync((job.Id, job.VideoUrl));
-                    _logger.LogInformation("Восстановленная задача {JobId} добавлена в очередь скачивания.", job.Id);
-                    await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} добавлена в очередь скачивания.");
-                }
-                return true; // Успешно добавлено в очередь
+                await _videoConverter.ProcessVideo(job.Id);
+                _logger.LogInformation("Восстановленная задача {JobId} передана в VideoConverter для обработки.", job.Id);
+                await _conversionLogger.LogSystemInfoAsync($"Восстановленная задача {job.Id} передана в VideoConverter для обработки.");
+                return true; // Успешно передано в VideoConverter
             }
-            catch(ChannelClosedException chEx)
+            catch (Exception ex)
             {
-                 _logger.LogError(chEx, "Не удалось записать восстановленную задачу {JobId} в очередь скачивания (канал закрыт).", job.Id);
-                 await _conversionLogger.LogErrorAsync(job.Id, "Не удалось записать восстановленную задачу в очередь скачивания (канал закрыт).", chEx.StackTrace, ConversionStatus.Pending);
-                 return false; 
-            }
-            catch (Exception writeEx)
-            {
-                _logger.LogError(writeEx, "Не удалось записать восстановленную задачу {JobId} в очередь скачивания.", job.Id);
-                await _conversionLogger.LogErrorAsync(job.Id, "Не удалось записать восстановленную задачу в очередь скачивания после сброса статуса.", writeEx.StackTrace, ConversionStatus.Pending);
-                return false; // Не удалось добавить в очередь
+                 _logger.LogError(ex, "Не удалось обработать восстановленную задачу {JobId} через VideoConverter.", job.Id);
+                 await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка при обработке восстановленной задачи через VideoConverter: {ex.Message}", ex.StackTrace, ConversionStatus.Pending);
+                 return false; // Не удалось обработать
             }
         }
         

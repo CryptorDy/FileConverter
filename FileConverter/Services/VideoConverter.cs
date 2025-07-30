@@ -3,6 +3,7 @@ using FileConverter.Models;
 using System.Security.Cryptography;
 using System.Text;
 using FileConverter.Services.Interfaces;
+using FileConverter.Helpers;
 using Microsoft.Extensions.Logging;
 using System.Threading.Tasks;
 using System;
@@ -73,77 +74,12 @@ public class VideoConverter : IVideoConverter
                  return;
             }
             
-            // Проверяем, не находится ли задача уже в активной обработке (чтобы избежать дублирования в каналах)
-            // Это может произойти, если RecoverStaleJobsAsync сработает одновременно с новым запросом
-            // Добавляем проверку статуса перед добавлением в канал
-            if (job.Status != ConversionStatus.Pending)
-            {
-                 _logger.LogInformation("Задача {JobId} находится в статусе {Status}, не добавляем повторно в очередь скачивания.", jobId, job.Status);
-                 return;
-            }
-
-            await _conversionLogger.LogJobQueuedAsync(jobId, job.VideoUrl, "Задача проверена и готова к постановке в очередь скачивания");
+            // Проверка кэша и обновление статуса теперь выполняется в DownloadBackgroundService
+            // после получения реального хеша файла для более точного кэширования
             
-            // Получаем хеш для поиска в репозитории
-            string videoHash;
-            try 
-            {
-                using (var sha = SHA256.Create())
-                {
-                    var hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(job.VideoUrl));
-                    videoHash = Convert.ToBase64String(hashBytes);
-                }
-            }
-            catch (Exception hashEx)
-            {
-                 _logger.LogError(hashEx, "Задача {JobId}: Ошибка вычисления SHA256 хеша для URL {VideoUrl}", jobId, job.VideoUrl);
-                 await _conversionLogger.LogErrorAsync(jobId, $"Ошибка вычисления хеша: {hashEx.Message}", hashEx.StackTrace);
-                 await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, errorMessage: "Ошибка вычисления хеша URL");
-                 return;
-            }
+            await _conversionLogger.LogJobQueuedAsync(jobId, job.VideoUrl, "Задача проверена и готова к постановке в очередь скачивания");
 
-            // Проверяем наличие в репозитории MediaItems (замена кэша)
-            try
-            {
-                var existingItem = await _mediaItemRepository.FindByVideoHashAsync(videoHash);
-                if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
-                {
-                    _logger.LogInformation("Задача {JobId}: Найден готовый результат в MediaItems по хешу {VideoHash}. URL: {AudioUrl}, Кадров: {KeyframeCount}", 
-                        jobId, videoHash, existingItem.AudioUrl, existingItem.Keyframes?.Count ?? 0);
-                    await _conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
-                    
-                    // Обновляем статус и сохраняем URL результата с ключевыми кадрами
-                    await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Completed, 
-                        mp3Url: existingItem.AudioUrl, 
-                        newVideoUrl: existingItem.VideoUrl);
-                    
-                    // Сохраняем ключевые кадры в ConversionJob если они есть
-                    if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
-                    {
-                        await _repository.UpdateJobKeyframesAsync(jobId, existingItem.Keyframes);
-                        _logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
-                            jobId, existingItem.Keyframes.Count);
-                    }
-                    
-                    return;
-                }
-            }
-            catch (Exception repoCheckEx)
-            {
-                // Не фатально, продолжаем без кэша, но логируем
-                 _logger.LogError(repoCheckEx, "Задача {JobId}: Ошибка при проверке MediaItems по хешу {VideoHash}", jobId, videoHash);
-                 await _conversionLogger.LogWarningAsync(jobId, $"Ошибка при проверке репозитория MediaItems: {repoCheckEx.Message}");
-            }
-
-            // Проверяем безопасность URL
-            if (!_urlValidator.IsUrlValid(job.VideoUrl))
-            {
-                _logger.LogWarning("Задача {JobId}: Обнаружен небезопасный URL: {VideoUrl}", jobId, job.VideoUrl);
-                await _conversionLogger.LogWarningAsync(jobId, "Обнаружен небезопасный URL", job.VideoUrl);
-                await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
-                    errorMessage: "Обнаружен недопустимый или небезопасный URL");
-                return;
-            }
+            // Валидация URL теперь выполняется в DbJobManager.EnqueueBatchJobs
 
             // Логируем информацию о задаче перед добавлением в очередь
             _logger.LogInformation("Задача {JobId} добавляется в очередь скачивания (_downloadChannel). Текущий размер очереди: {QueueCount}", 
@@ -152,33 +88,57 @@ public class VideoConverter : IVideoConverter
             // Помещаем видео в очередь загрузки
             try 
             { 
+                bool writeSuccessful = false;
+                
                 // Проверяем, является ли это YouTube видео
                 if (_youtubeDownloadService.IsYoutubeUrl(job.VideoUrl))
                 {
-                    await _channels.YoutubeDownloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
-                    await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь YouTube скачивания");
-                    _logger.LogInformation("Задача {JobId} успешно добавлена в YoutubeDownloadChannel.", jobId);
+                    writeSuccessful = _channels.YoutubeDownloadChannel.Writer.TryWrite((jobId, job.VideoUrl));
+                    if (writeSuccessful)
+                    {
+                        await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь YouTube скачивания");
+                        _logger.LogInformation("Задача {JobId} успешно добавлена в YoutubeDownloadChannel.", jobId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Задача {JobId}: YouTube очередь переполнена, задача отброшена.", jobId);
+                        await _conversionLogger.LogErrorAsync(jobId, "YouTube очередь переполнена, задача не может быть обработана сейчас");
+                        await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
+                            errorMessage: "Система перегружена, очередь YouTube переполнена");
+                    }
                 }
                 else
                 {
-                    await _channels.DownloadChannel.Writer.WriteAsync((jobId, job.VideoUrl));
-                    await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на скачивание");
-                    _logger.LogInformation("Задача {JobId} успешно добавлена в _downloadChannel.", jobId);
+                    writeSuccessful = _channels.DownloadChannel.Writer.TryWrite((jobId, job.VideoUrl));
+                    if (writeSuccessful)
+                    {
+                        await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на скачивание");
+                        _logger.LogInformation("Задача {JobId} успешно добавлена в _downloadChannel.", jobId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Задача {JobId}: Очередь скачивания переполнена, задача отброшена.", jobId);
+                        await _conversionLogger.LogErrorAsync(jobId, "Очередь скачивания переполнена, задача не может быть обработана сейчас");
+                        await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
+                            errorMessage: "Система перегружена, очередь скачивания переполнена");
+                    }
                 }
-                    
-                // Обновляем LastAttemptAt, чтобы задача не считалась зависшей сразу после добавления
-                job.LastAttemptAt = DateTime.UtcNow; 
-                await _repository.UpdateJobAsync(job);
+                
+                // LastAttemptAt уже обновлен атомарно в TryUpdateJobStatusIfAsync
             } 
             catch(ChannelClosedException chEx) 
             { 
-                 _logger.LogError(chEx, "Задача {JobId}: Не удалось записать в _downloadChannel, так как канал закрыт.", jobId);
-                 await _conversionLogger.LogErrorAsync(jobId, "Не удалось записать задачу в очередь скачивания (канал закрыт).", chEx.StackTrace);
+                 _logger.LogError(chEx, "Задача {JobId}: Не удалось записать в очередь, так как канал закрыт.", jobId);
+                 await _conversionLogger.LogErrorAsync(jobId, "Не удалось записать задачу в очередь (канал закрыт).", chEx.StackTrace);
+                 await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
+                    errorMessage: "Система недоступна (канал закрыт)");
             }
             catch (Exception writeEx)
             {
-                 _logger.LogError(writeEx, "Задача {JobId}: Ошибка при записи в _downloadChannel.", jobId);
-                 await _conversionLogger.LogErrorAsync(jobId, $"Ошибка при записи задачи в очередь скачивания: {writeEx.Message}", writeEx.StackTrace);
+                 _logger.LogError(writeEx, "Задача {JobId}: Ошибка при записи в очередь.", jobId);
+                 await _conversionLogger.LogErrorAsync(jobId, $"Ошибка при записи задачи в очередь: {writeEx.Message}", writeEx.StackTrace);
+                 await DbJobManager.UpdateJobStatusAsync(_repository, jobId, ConversionStatus.Failed, 
+                    errorMessage: $"Ошибка постановки в очередь: {writeEx.Message}");
             }
         }
         catch (Exception ex)

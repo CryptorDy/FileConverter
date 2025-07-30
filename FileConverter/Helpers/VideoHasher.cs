@@ -6,6 +6,8 @@ namespace FileConverter.Services
     public class VideoHasher
     {
         private const int ChunkSize = 4096;
+        // Добавляем ограничение на максимальный размер файла для хеширования (2 ГБ)
+        private const long MaxFileSizeForHashing = 2L * 1024 * 1024 * 1024; // 2 GB
 
         public static string GetHash(byte[] videoData)
         {
@@ -15,6 +17,12 @@ namespace FileConverter.Services
             }
 
             long fileSize = videoData.Length;
+            
+            // Защита от DoS атак через огромные файлы
+            if (fileSize > MaxFileSizeForHashing)
+            {
+                throw new ArgumentException($"Файл слишком большой для хеширования. Максимальный размер: {MaxFileSizeForHashing / (1024 * 1024)} МБ, получен: {fileSize / (1024 * 1024)} МБ");
+            }
 
             try
             {

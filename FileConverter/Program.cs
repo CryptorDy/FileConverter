@@ -11,6 +11,8 @@ using System.Text;
 using Amazon.S3;
 using FileConverter.Services.Interfaces;
 using FileConverter.BackgroundServices;
+using FileConverter.Services.BackgroundServices;
+using FileConverter.Helpers;
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var encoding = Encoding.GetEncoding(1251);
@@ -171,6 +173,9 @@ builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
 builder.Services.AddSingleton<IYoutubeDownloadService, YoutubeDownloadService>();
 builder.Services.AddSingleton<ProcessingChannels>();
 
+// Сервис анализа аудио Essentia
+builder.Services.AddScoped<AudioAnalyzer>();
+
 // Кэширование, каналы и временные файлы
 builder.Services.AddSingleton<DistributedCacheManager>();
 builder.Services.AddSingleton<ITempFileManager, TempFileManager>();
@@ -280,6 +285,7 @@ builder.Services.AddCors(options =>
 // Регистрируем фоновые службы (Hosted Services)
 builder.Services.AddHostedService<DownloadBackgroundService>();
 builder.Services.AddHostedService<ConversionBackgroundService>();
+builder.Services.AddHostedService<AudioAnalysisBackgroundService>();
 builder.Services.AddHostedService<KeyframeExtractionBackgroundService>();
 builder.Services.AddHostedService<UploadBackgroundService>();
 builder.Services.AddHostedService<YoutubeBackgroundService>();
