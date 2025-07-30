@@ -119,91 +119,70 @@ namespace FileConverter.Services.BackgroundServices
                             byte[] fileData;
                             string sourceDescription;
 
-                            // Пытаемся скачать из S3 одним запросом
-                            fileData = await storageService.TryDownloadFileAsync(videoUrl);
-                            if (fileData != null)
+                                                    // Пытаемся скачать из S3 одним запросом
+                        fileData = await storageService.TryDownloadFileAsync(videoUrl);
+                        if (fileData != null)
+                        {
+                            // Файл найден в S3 - создаем временный файл и сохраняем данные
+                            sourceDescription = "S3 хранилища";
+                            videoPath = tempFileManager.CreateTempFile(".mp4");
+                            await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
+                            
+                            await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} найдено в S3: {videoUrl}");
+                            await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length);
+                            
+                            logger.LogInformation("Задача {JobId}: видео найдено в S3, сохранено во временный файл {VideoPath}", jobId, videoPath);
+                        }
+                        else
+                        {
+                            sourceDescription = $"URL ({ (IsInstagramUrl(videoUrl) ? "instagram-downloader" : "default") })";
+                            logger.LogInformation("Задача {JobId}: скачивание из {SourceDescription}: {VideoUrl}", jobId, sourceDescription, videoUrl);
+                            try
                             {
-                                // Файл найден в S3 - это значит он УЖЕ обработан!
-                                // Просто завершаем задачу как Completed с URL из S3
-                                sourceDescription = "S3 хранилища (уже обработан)";
-                                await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} найдено в S3 как готовый результат: {videoUrl}");
-                                await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length);
-                                
-                                // Файл в S3 означает, что обработка УЖЕ завершена
-                                // Обновляем статус задачи на Completed с URL из S3
-                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
-                                    mp3Url: videoUrl, // S3 URL уже указывает на готовый результат
-                                    newVideoUrl: videoUrl);
-                                
-                                // Останавливаем таймер для метрик (готовый результат из S3)
-                                _metricsCollector.StopTimer("download_video", jobId, isSuccess: true);
-                                
-                                logger.LogInformation("Задача {JobId}: найден готовый результат в S3, обработка не требуется", jobId);
-                                continue; // Переходим к следующей задаче
-                            }
-                            else
-                            {
-                                sourceDescription = $"URL ({ (IsInstagramUrl(videoUrl) ? "instagram-downloader" : "default") })";
-                                logger.LogInformation("Задача {JobId}: скачивание из {SourceDescription}: {VideoUrl}", jobId, sourceDescription, videoUrl);
-                                try
-                                {
-                                    using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
-                                    // Используем CancellationToken для возможности отмены запроса
-                                    using var response = await instagramHttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
+                                using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
+                                // Используем CancellationToken для возможности отмены запроса
+                                using var response = await instagramHttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stoppingToken);
 
-                                    if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                                        throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямое скачивание: {videoUrl}");
-                                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                                        throw new InvalidOperationException($"Файл не найден (404 Not Found): {videoUrl}");
-                                    if (!response.IsSuccessStatusCode)
-                                        throw new InvalidOperationException($"HTTP ошибка при скачивании: {(int)response.StatusCode} {response.ReasonPhrase}");
+                                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямое скачивание: {videoUrl}");
+                                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                                    throw new InvalidOperationException($"Файл не найден (404 Not Found): {videoUrl}");
+                                if (!response.IsSuccessStatusCode)
+                                    throw new InvalidOperationException($"HTTP ошибка при скачивании: {(int)response.StatusCode} {response.ReasonPhrase}");
 
-                                    // Создаем временный файл сразу для потоковой загрузки
-                                    videoPath = tempFileManager.CreateTempFile(".mp4");
-                                    logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
-
-                                    // Streaming загрузка без загрузки в память
-                                    using (var fileStream = File.Create(videoPath))
-                                    using (var httpStream = await response.Content.ReadAsStreamAsync(stoppingToken))
-                                    {
-                                        await httpStream.CopyToAsync(fileStream, stoppingToken);
-                                    }
-
-                                    var fileInfo = new FileInfo(videoPath);
-                                    var fileSizeBytes = fileInfo.Length;
-                                    
-                                    await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} скачано по {sourceDescription}: {videoUrl}");
-                                    await conversionLogger.LogDownloadProgressAsync(jobId, fileSizeBytes, fileSizeBytes);
-                                    
-                                    // Читаем файл для вычисления хеша
-                                    fileData = await File.ReadAllBytesAsync(videoPath, stoppingToken);
-                                }
-                                catch (HttpRequestException httpEx)
-                                {
-                                    if (httpEx.Message.Contains("403"))
-                                        throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL требует авторизации: {videoUrl}", httpEx);
-                                    else
-                                        throw new InvalidOperationException($"HTTP ошибка при скачивании: {httpEx.Message}", httpEx);
-                                }
-                                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                                {
-                                    logger.LogInformation("Операция скачивания для задачи {JobId} отменена.", jobId);
-                                    throw; // Повторно выбрасываем исключение для корректной обработки отмены
-                                }
-                            }
-
-                            // Если скачивали из S3, создаем временный файл
-                            if (string.IsNullOrEmpty(videoPath))
-                            {
+                                // Создаем временный файл сразу для потоковой загрузки
                                 videoPath = tempFileManager.CreateTempFile(".mp4");
                                 logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
-                                await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
-                                logger.LogInformation("Задача {JobId}: видео сохранено во временный файл {VideoPath}", jobId, videoPath);
+
+                                // Streaming загрузка без загрузки в память
+                                using (var fileStream = File.Create(videoPath))
+                                using (var httpStream = await response.Content.ReadAsStreamAsync(stoppingToken))
+                                {
+                                    await httpStream.CopyToAsync(fileStream, stoppingToken);
+                                }
+
+                                var fileInfo = new FileInfo(videoPath);
+                                var fileSizeBytes = fileInfo.Length;
+                                
+                                await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} скачано по {sourceDescription}: {videoUrl}");
+                                await conversionLogger.LogDownloadProgressAsync(jobId, fileSizeBytes, fileSizeBytes);
+                                
+                                // Читаем файл для вычисления хеша
+                                fileData = await File.ReadAllBytesAsync(videoPath, stoppingToken);
                             }
-                            else
+                            catch (HttpRequestException httpEx)
                             {
-                                logger.LogInformation("Задача {JobId}: видео уже сохранено во временный файл {VideoPath}", jobId, videoPath);
+                                if (httpEx.Message.Contains("403"))
+                                    throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL требует авторизации: {videoUrl}", httpEx);
+                                else
+                                    throw new InvalidOperationException($"HTTP ошибка при скачивании: {httpEx.Message}", httpEx);
                             }
+                            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                            {
+                                logger.LogInformation("Операция скачивания для задачи {JobId} отменена.", jobId);
+                                throw; // Повторно выбрасываем исключение для корректной обработки отмены
+                            }
+                        }
                             await conversionLogger.LogDownloadCompletedAsync(jobId, fileData.Length, videoPath);
 
                             // Вычисляем хеш видео по содержимому файла
