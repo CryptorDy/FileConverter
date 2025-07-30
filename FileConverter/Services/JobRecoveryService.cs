@@ -61,6 +61,9 @@ namespace FileConverter.Services
             {
                 _logger.LogInformation("Запуск процесса восстановления зависших заданий...");
                 
+                // Добавляем диагностику состояния задач
+                await LogTaskStatisticsAsync();
+                
                 var recoveryTimeSpan = TimeSpan.FromMinutes(_staleJobThresholdMinutes);
                 var staleJobs = await _jobRepository.GetStaleJobsAsync(recoveryTimeSpan);
                 
@@ -72,6 +75,19 @@ namespace FileConverter.Services
                 
                 _logger.LogWarning("Найдено {Count} зависших заданий (не обновлялись дольше {Minutes} мин).", 
                     staleJobs.Count, _staleJobThresholdMinutes);
+                
+                // Подробная диагностика зависших задач
+                foreach (var staleJob in staleJobs)
+                {
+                    var timeStale = DateTime.UtcNow - (staleJob.LastAttemptAt ?? staleJob.CreatedAt);
+                    _logger.LogWarning("Зависшая задача {JobId}: Статус {Status}, Попытка {Attempt}/{MaxAttempts}, " +
+                                      "Висит {StaleMinutes:F1} мин, URL: {VideoUrl}", 
+                        staleJob.Id, staleJob.Status, staleJob.ProcessingAttempts, _maxAttempts, 
+                        timeStale.TotalMinutes, staleJob.VideoUrl);
+                    
+                    await _conversionLogger.LogSystemInfoAsync(
+                        $"Обнаружена зависшая задача {staleJob.Id} в статусе {staleJob.Status} (висит {timeStale.TotalMinutes:F1} мин)");
+                }
                 
                 foreach (var job in staleJobs)
                 {
@@ -168,6 +184,34 @@ namespace FileConverter.Services
                  _logger.LogError(ex, "Не удалось обработать восстановленную задачу {JobId} через VideoConverter.", job.Id);
                  await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка при обработке восстановленной задачи через VideoConverter: {ex.Message}", ex.StackTrace, ConversionStatus.Pending);
                  return false; // Не удалось обработать
+            }
+        }
+        
+        /// <summary>
+        /// Логирует статистику по задачам для диагностики
+        /// </summary>
+        private async Task LogTaskStatisticsAsync()
+        {
+            try
+            {
+                var downloadingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Downloading });
+                var convertingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Converting });
+                var uploadingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Uploading });
+                var pendingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Pending });
+                var completedCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Completed });
+                var failedCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Failed });
+                
+                _logger.LogInformation("Статистика задач: Pending={Pending}, Downloading={Downloading}, Converting={Converting}, " +
+                                      "Uploading={Uploading}, Completed={Completed}, Failed={Failed}", 
+                    pendingCount, downloadingCount, convertingCount, uploadingCount, completedCount, failedCount);
+                
+                await _conversionLogger.LogSystemInfoAsync(
+                    $"Статистика задач: Pending={pendingCount}, Downloading={downloadingCount}, Converting={convertingCount}, " +
+                    $"Uploading={uploadingCount}, Completed={completedCount}, Failed={failedCount}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении статистики задач");
             }
         }
         

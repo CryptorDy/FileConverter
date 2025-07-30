@@ -1,7 +1,9 @@
 using FileConverter.Models;
 using FileConverter.Services;
 using FileConverter.Services.Interfaces;
+using FileConverter.Data;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FileConverter.Controllers
 {
@@ -11,13 +13,16 @@ namespace FileConverter.Controllers
     {
         private readonly IJobManager _jobManager;
         private readonly ILogger<VideoConverterController> _logger;
+        private readonly IServiceProvider _serviceProvider;
 
         public VideoConverterController(
             IJobManager jobManager,
-            ILogger<VideoConverterController> logger)
+            ILogger<VideoConverterController> logger,
+            IServiceProvider serviceProvider)
         {
             _jobManager = jobManager;
             _logger = logger;
+            _serviceProvider = serviceProvider;
         }
 
         /// <summary>
@@ -175,6 +180,80 @@ namespace FileConverter.Controllers
             {
                 _logger.LogError(ex, "Ошибка при получении списка задач");
                 return StatusCode(500, "Произошла ошибка при получении списка задач");
+            }
+        }
+
+        /// <summary>
+        /// Ручное восстановление зависших задач (админ функция)
+        /// </summary>
+        [HttpPost("recovery/force")]
+        public async Task<IActionResult> ForceRecoveryStaleJobs()
+        {
+            try
+            {
+                var recoveryService = _serviceProvider.GetRequiredService<IJobRecoveryService>();
+                int recoveredCount = await recoveryService.RecoverStaleJobsAsync();
+                
+                return Ok(new { 
+                    message = $"Восстановлено {recoveredCount} зависших задач", 
+                    recoveredCount = recoveredCount,
+                    timestamp = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при принудительном восстановлении задач");
+                return StatusCode(500, new { error = "Ошибка при восстановлении задач", details = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Получение диагностической информации о состоянии системы
+        /// </summary>
+        [HttpGet("diagnostics")]
+        public async Task<IActionResult> GetSystemDiagnostics()
+        {
+            try
+            {
+                var jobRepository = _serviceProvider.GetRequiredService<IJobRepository>();
+                
+                var stats = new Dictionary<string, object>
+                {
+                    ["timestamp"] = DateTime.UtcNow,
+                    ["pending"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Pending }),
+                    ["downloading"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Downloading }),
+                    ["converting"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Converting }),
+                    ["uploading"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Uploading }),
+                    ["audioAnalyzing"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.AudioAnalyzing }),
+                    ["extractingKeyframes"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.ExtractingKeyframes }),
+                    ["completed"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Completed }),
+                    ["failed"] = await jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Failed })
+                };
+                
+                // Получаем потенциально зависшие задачи (старше 10 минут)
+                var staleJobs = await jobRepository.GetStaleJobsAsync(TimeSpan.FromMinutes(10));
+                stats["potentiallyStale"] = staleJobs.Count;
+                
+                if (staleJobs.Any())
+                {
+                    stats["staleJobsDetails"] = staleJobs.Take(10).Select(j => new
+                    {
+                        jobId = j.Id,
+                        status = j.Status.ToString(),
+                        videoUrl = j.VideoUrl,
+                        processingAttempts = j.ProcessingAttempts,
+                        lastAttemptAt = j.LastAttemptAt,
+                        createdAt = j.CreatedAt,
+                        staleMinutes = Math.Round((DateTime.UtcNow - (j.LastAttemptAt ?? j.CreatedAt)).TotalMinutes, 1)
+                    }).ToList();
+                }
+                
+                return Ok(stats);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Ошибка при получении диагностики системы");
+                return StatusCode(500, new { error = "Ошибка при получении диагностики", details = ex.Message });
             }
         }
     }

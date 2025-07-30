@@ -155,11 +155,13 @@ namespace FileConverter.Services
 
                             // Обработка прогресса с throttling
                             DateTime lastLogTime = DateTime.MinValue;
+                            DateTime lastHeartbeatTime = DateTime.UtcNow;
                             double lastLoggedPercent = -1;
                             conversion.OnProgress += async (sender, args) => {
                                 var now = DateTime.UtcNow;
                                 var percentDiff = Math.Abs(args.Percent - lastLoggedPercent);
                                 var timeDiff = (now - lastLogTime).TotalSeconds;
+                                var heartbeatDiff = (now - lastHeartbeatTime).TotalMinutes;
                                 
                                 // Логируем только если прошло 10 секунд ИЛИ прогресс изменился на 5%+
                                 if (timeDiff >= 10 || percentDiff >= 5 || args.Percent >= 99)
@@ -169,14 +171,34 @@ namespace FileConverter.Services
                                     lastLoggedPercent = args.Percent;
                                     logger.LogTrace("Задача {JobId}: прогресс конвертации {Percent:F1}%", jobId, args.Percent);
                                 }
+                                
+                                // Heartbeat: обновляем LastAttemptAt каждую минуту для предотвращения ложного восстановления
+                                if (heartbeatDiff >= 1)
+                                {
+                                    try
+                                    {
+                                        var currentJob = await jobRepository.GetJobByIdAsync(jobId);
+                                        if (currentJob != null && currentJob.Status == ConversionStatus.Converting)
+                                        {
+                                            currentJob.LastAttemptAt = DateTime.UtcNow;
+                                            await jobRepository.UpdateJobAsync(currentJob);
+                                            logger.LogTrace("Задача {JobId}: heartbeat - обновлен LastAttemptAt", jobId);
+                                        }
+                                        lastHeartbeatTime = now;
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger.LogWarning(ex, "Задача {JobId}: ошибка heartbeat при обновлении LastAttemptAt", jobId);
+                                    }
+                                }
                             };
 
                             // Запускаем конвертацию с тайм-аутом
                             using var timeoutCts = new CancellationTokenSource();
                             using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
                             
-                            // Устанавливаем тайм-аут 30 минут для конвертации
-                            timeoutCts.CancelAfter(TimeSpan.FromMinutes(30));
+                            // Устанавливаем тайм-аут 5 минут для конвертации
+                            timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
                             
                             IConversionResult result = await conversion.Start(combinedCts.Token);
                             
@@ -227,12 +249,12 @@ namespace FileConverter.Services
                         catch (OperationCanceledException)
                         {
                             // Тайм-аут конвертации
-                            logger.LogError("Задача {JobId}: Превышен тайм-аут конвертации (30 минут).", jobId);
+                            logger.LogError("Задача {JobId}: Превышен тайм-аут конвертации (5 минут).", jobId);
                             
                             // Останавливаем таймер для метрик (тайм-аут конвертации)
                             _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: false);
                             
-                            await conversionLogger.LogErrorAsync(jobId, "Превышен тайм-аут конвертации (30 минут)", null, ConversionStatus.Failed);
+                            await conversionLogger.LogErrorAsync(jobId, "Превышен тайм-аут конвертации (5 минут)", null, ConversionStatus.Failed);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Тайм-аут конвертации");
                             // Очищаем временные файлы
                             CleanupFile(tempFileManager, videoPath, logger, jobId);
