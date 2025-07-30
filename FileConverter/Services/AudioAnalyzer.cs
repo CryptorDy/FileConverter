@@ -133,15 +133,25 @@ namespace FileConverter.Services
 
         private string RunPythonScript(string argument)
         {
+            // Пытаемся использовать Python из виртуального окружения, если доступно
+            var pythonExecutable = GetPythonExecutable();
+            
             var startInfo = new ProcessStartInfo
             {
-                FileName = "python3",
+                FileName = pythonExecutable,
                 Arguments = $"{_pythonScriptPath} {argument}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            
+            // Добавляем переменные окружения для Python
+            var pythonPath = Environment.GetEnvironmentVariable("PYTHONPATH");
+            if (!string.IsNullOrEmpty(pythonPath))
+            {
+                startInfo.EnvironmentVariables["PYTHONPATH"] = pythonPath;
+            }
 
             using var process = Process.Start(startInfo);
             if (process == null)
@@ -165,6 +175,30 @@ namespace FileConverter.Services
             }
 
             return output.Trim();
+        }
+
+        private string GetPythonExecutable()
+        {
+            // Порядок приоритета для поиска Python
+            var pythonCandidates = new[]
+            {
+                "/opt/essentia-venv/bin/python3",     // Виртуальное окружение (альтернативный Dockerfile)
+                "/opt/venv/bin/python3",              // Виртуальное окружение (основной Dockerfile)
+                "/usr/local/bin/python3-essentia",   // Symlink
+                "python3"                             // Системный Python
+            };
+
+            foreach (var candidate in pythonCandidates)
+            {
+                if (File.Exists(candidate) || candidate == "python3")
+                {
+                    _logger.LogDebug("Используем Python: {PythonPath}", candidate);
+                    return candidate;
+                }
+            }
+
+            _logger.LogWarning("Не найден подходящий Python исполняемый файл, используем python3 по умолчанию");
+            return "python3";
         }
 
         public void Dispose()

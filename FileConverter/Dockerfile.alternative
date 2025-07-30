@@ -3,10 +3,6 @@ WORKDIR /app
 EXPOSE 5080
 EXPOSE 443
 
-# Стадия сборки Essentia
-FROM ghcr.io/mtg/essentia:latest AS essentia-stage
-# Этот образ уже содержит скомпилированную Essentia со всеми зависимостями
-
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 COPY ["FileConverter.csproj", "./"]
@@ -22,7 +18,7 @@ RUN dotnet publish "FileConverter.csproj" -c Release -o /app/publish /p:UseAppHo
 FROM base AS final
 WORKDIR /app
 
-# Установка необходимых пакетов для Python и Essentia
+# Установка необходимых пакетов и Python зависимостей
 RUN apt-get update && \
     apt-get install -y software-properties-common && \
     apt-get install -y \
@@ -32,8 +28,15 @@ RUN apt-get update && \
     python3-dev \
     python3-numpy \
     python3-scipy \
+    python3-matplotlib \
     ffmpeg \
     curl \
+    wget \
+    git \
+    cmake \
+    build-essential \
+    pkg-config \
+    libeigen3-dev \
     libfftw3-dev \
     libavcodec-dev \
     libavformat-dev \
@@ -41,17 +44,22 @@ RUN apt-get update && \
     libswresample-dev \
     libtag1-dev \
     libyaml-cpp-dev \
-    pkg-config \
-    build-essential && \
+    libchromaprint-dev \
+    python3-yaml \
+    python3-six && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Установка Essentia через pip с несколькими fallback вариантами
-RUN python3 -m pip install --no-cache-dir --break-system-packages essentia || \
-    (python3 -m venv /opt/venv && \
-     /opt/venv/bin/pip install --no-cache-dir essentia && \
-     ln -sf /opt/venv/bin/python3 /usr/local/bin/python3-essentia) || \
-    echo "ВНИМАНИЕ: Essentia не установлена, анализ аудио будет пропущен"
+# Создаем виртуальное окружение и устанавливаем Essentia
+RUN python3 -m venv /opt/essentia-venv && \
+    /opt/essentia-venv/bin/pip install --upgrade pip && \
+    /opt/essentia-venv/bin/pip install numpy scipy pyyaml && \
+    /opt/essentia-venv/bin/pip install essentia || \
+    (/opt/essentia-venv/bin/pip install --no-cache-dir essentia-tensorflow) || \
+    (echo "Установка из PyPI не удалась, пропускаем Essentia")
+
+# Создаем symlink для удобства
+RUN ln -sf /opt/essentia-venv/bin/python3 /usr/local/bin/python3-essentia
 
 COPY --from=publish /app/publish .
 
@@ -68,8 +76,9 @@ RUN mkdir -p /tmp/FileConverter/Temp && chmod -R 777 /tmp/FileConverter
 # Установка переменных среды
 ENV ASPNETCORE_ENVIRONMENT=Production
 ENV ASPNETCORE_URLS=http://+:5080
-ENV PYTHONPATH=/usr/local/lib/python3.11/dist-packages:/opt/venv/lib/python3.11/site-packages
-ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/opt/essentia-venv/lib/python3.11/site-packages
+ENV PATH="/opt/essentia-venv/bin:$PATH"
+ENV PYTHON_VENV=/opt/essentia-venv
 
 # Добавление пользователя для работы приложения
 RUN adduser --disabled-password --gecos "" appuser
