@@ -138,5 +138,34 @@ namespace FileConverter.Services
                 throw;
             }
         }
+        
+        public async Task<byte[]?> TryDownloadFileAsync(string url)
+        {
+            try
+            {
+                // Объединяем проверку существования и загрузку в один запрос
+                var httpClient = _httpClientFactory.CreateClient("default");
+                using var response = await httpClient.GetAsync(url);
+                
+                // Если файл не найден, возвращаем null
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    return null;
+                }
+                
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsByteArrayAsync();
+            }
+            catch (HttpRequestException)
+            {
+                // Файл не существует или недоступен
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error downloading file: {url}");
+                throw;
+            }
+        }
     }
 } 

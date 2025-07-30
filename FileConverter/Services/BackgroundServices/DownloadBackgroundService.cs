@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 
-namespace FileConverter.Services
+namespace FileConverter.Services.BackgroundServices
 {
     /// <summary>
     /// Фоновый сервис для скачивания видео из очереди DownloadChannel.
@@ -22,19 +22,22 @@ namespace FileConverter.Services
         private readonly ILogger<DownloadBackgroundService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
+        private readonly MetricsCollector _metricsCollector;
         private readonly int _maxConcurrentDownloads;
 
         public DownloadBackgroundService(
             ILogger<DownloadBackgroundService> logger,
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
+            MetricsCollector metricsCollector,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
+            _metricsCollector = metricsCollector;
             // Получаем максимальное количество параллельных загрузок из конфигурации
-            _maxConcurrentDownloads = configuration.GetValue<int>("Performance:MaxConcurrentDownloads", 5); 
+            _maxConcurrentDownloads = configuration.GetValue("Performance:MaxConcurrentDownloads", 5); 
             _logger.LogInformation("DownloadBackgroundService инициализирован с {MaxConcurrentDownloads} параллельными загрузками.", _maxConcurrentDownloads);
         }
 
@@ -96,24 +99,47 @@ namespace FileConverter.Services
                                 await conversionLogger.LogErrorAsync(jobId, $"Задача {jobId} не найдена в БД.");
                                 continue; // Переходим к следующей итерации
                             }
+                            
+                            // Атомарно обновляем статус с проверкой, что задача еще в статусе Pending
+                            bool statusUpdated = await jobRepository.TryUpdateJobStatusIfAsync(jobId, ConversionStatus.Pending, ConversionStatus.Downloading);
+                            if (!statusUpdated)
+                            {
+                                logger.LogInformation("Задача {JobId} уже не в статусе Pending, пропускаем обработку (возможно уже обрабатывается).", jobId);
+                                continue; // Переходим к следующей итерации
+                            }
+                            
                             queueTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds;
-                            
                             await conversionLogger.LogDownloadStartedAsync(jobId, videoUrl, queueTimeMs);
-                            
-                            // Обновляем статус на Downloading
-                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Downloading);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Downloading);
+
+                            // Запускаем таймер для метрик загрузки
+                            _metricsCollector.StartTimer("download_video", jobId);
 
                             // Скачиваем видео
                             byte[] fileData;
                             string sourceDescription;
 
-                            if (await storageService.FileExistsAsync(videoUrl)) // Проверяем, не лежит ли файл уже в нашем S3
+                            // Пытаемся скачать из S3 одним запросом
+                            fileData = await storageService.TryDownloadFileAsync(videoUrl);
+                            if (fileData != null)
                             {
-                                sourceDescription = "S3 хранилища";
-                                fileData = await storageService.DownloadFileAsync(videoUrl);
-                                await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} скачано из S3: {videoUrl}");
+                                // Файл найден в S3 - это значит он УЖЕ обработан!
+                                // Просто завершаем задачу как Completed с URL из S3
+                                sourceDescription = "S3 хранилища (уже обработан)";
+                                await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} найдено в S3 как готовый результат: {videoUrl}");
                                 await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length);
+                                
+                                // Файл в S3 означает, что обработка УЖЕ завершена
+                                // Обновляем статус задачи на Completed с URL из S3
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
+                                    mp3Url: videoUrl, // S3 URL уже указывает на готовый результат
+                                    newVideoUrl: videoUrl);
+                                
+                                // Останавливаем таймер для метрик (готовый результат из S3)
+                                _metricsCollector.StopTimer("download_video", jobId, isSuccess: true);
+                                
+                                logger.LogInformation("Задача {JobId}: найден готовый результат в S3, обработка не требуется", jobId);
+                                continue; // Переходим к следующей задаче
                             }
                             else
                             {
@@ -132,9 +158,25 @@ namespace FileConverter.Services
                                     if (!response.IsSuccessStatusCode)
                                         throw new InvalidOperationException($"HTTP ошибка при скачивании: {(int)response.StatusCode} {response.ReasonPhrase}");
 
-                                    fileData = await response.Content.ReadAsByteArrayAsync(stoppingToken);
+                                    // Создаем временный файл сразу для потоковой загрузки
+                                    videoPath = tempFileManager.CreateTempFile(".mp4");
+                                    logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
+
+                                    // Streaming загрузка без загрузки в память
+                                    using (var fileStream = File.Create(videoPath))
+                                    using (var httpStream = await response.Content.ReadAsStreamAsync(stoppingToken))
+                                    {
+                                        await httpStream.CopyToAsync(fileStream, stoppingToken);
+                                    }
+
+                                    var fileInfo = new FileInfo(videoPath);
+                                    var fileSizeBytes = fileInfo.Length;
+                                    
                                     await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} скачано по {sourceDescription}: {videoUrl}");
-                                    await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length);
+                                    await conversionLogger.LogDownloadProgressAsync(jobId, fileSizeBytes, fileSizeBytes);
+                                    
+                                    // Читаем файл для вычисления хеша
+                                    fileData = await File.ReadAllBytesAsync(videoPath, stoppingToken);
                                 }
                                 catch (HttpRequestException httpEx)
                                 {
@@ -150,65 +192,90 @@ namespace FileConverter.Services
                                 }
                             }
 
-                            // Создаем временный файл
-                            videoPath = tempFileManager.CreateTempFile(".mp4");
-                            logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
-
-                            await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
-                            logger.LogInformation("Задача {JobId}: видео сохранено во временный файл {VideoPath}", jobId, videoPath);
+                            // Если скачивали из S3, создаем временный файл
+                            if (string.IsNullOrEmpty(videoPath))
+                            {
+                                videoPath = tempFileManager.CreateTempFile(".mp4");
+                                logger.LogInformation("Задача {JobId}: создан временный файл {VideoPath}", jobId, videoPath);
+                                await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
+                                logger.LogInformation("Задача {JobId}: видео сохранено во временный файл {VideoPath}", jobId, videoPath);
+                            }
+                            else
+                            {
+                                logger.LogInformation("Задача {JobId}: видео уже сохранено во временный файл {VideoPath}", jobId, videoPath);
+                            }
                             await conversionLogger.LogDownloadCompletedAsync(jobId, fileData.Length, videoPath);
 
-                            // Вычисляем хеш видео
+                            // Вычисляем хеш видео по содержимому файла
+                            // Для всех файлов (включая S3) используем хеширование содержимого для корректного кэширования
                             string videoHash = VideoHasher.GetHash(fileData);
-                            logger.LogInformation("Задача {JobId}: хеш видео {VideoHash}", jobId, videoHash);
+                            logger.LogInformation("Задача {JobId}: хеш видео {VideoHash} (источник: {Source})", jobId, videoHash, sourceDescription);
 
-                            // Проверяем наличие готового MP3 в репозитории по хешу видео
+                            // Проверяем кэш по реальному хешу файла
                             var mediaItemRepository = scope.ServiceProvider.GetRequiredService<IMediaItemRepository>();
-                            var existingItem = await mediaItemRepository.FindByVideoHashAsync(videoHash);
-                            // Если есть, то обновляем задачи
-                            if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
+                            try
                             {
-                                logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}, Кадров: {KeyframeCount}", 
-                                    jobId, videoHash, existingItem.AudioUrl, existingItem.Keyframes?.Count ?? 0);
-                                await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
-
-                                job = await jobRepository.GetJobByIdAsync(jobId);
-                                if (job != null)
+                                var existingItem = await mediaItemRepository.FindByVideoHashAsync(videoHash);
+                                if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
                                 {
-                                    job.FileSizeBytes = fileData.Length;
-                                    job.Status = ConversionStatus.Completed;
-                                    job.Mp3Url = existingItem.AudioUrl;
-                                    job.VideoUrl = videoUrl;
-                                    job.NewVideoUrl = existingItem.VideoUrl;
-                                    job.VideoHash = videoHash;
-                                    job.LastAttemptAt = DateTime.UtcNow;
+                                    logger.LogInformation("Задача {JobId}: Найден кэш по хешу файла {VideoHash}. URL: {AudioUrl}", 
+                                        jobId, videoHash, existingItem.AudioUrl);
+                                    await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
+                                    
+                                    // Обновляем статус задачи на Completed с данными из кэша
+                                    await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
+                                        mp3Url: existingItem.AudioUrl, 
+                                        newVideoUrl: existingItem.VideoUrl);
                                     
                                     // Сохраняем ключевые кадры если они есть
                                     if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
                                     {
-                                        job.Keyframes = existingItem.Keyframes;
+                                        await jobRepository.UpdateJobKeyframesAsync(jobId, existingItem.Keyframes);
                                         logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
                                             jobId, existingItem.Keyframes.Count);
                                     }
                                     
-                                    await jobRepository.UpdateJobAsync(job);
-                                    logger.LogDebug("Задача {JobId}: информация о файле обновлена в БД.", jobId);
-                                } else
-                                {
-                                    logger.LogDebug("Задача {JobId}: не найдена в БД.", jobId);
+                                    // Сохраняем данные анализа аудио если они есть
+                                    if (existingItem.AudioAnalysis != null)
+                                    {
+                                        await jobRepository.UpdateJobAudioAnalysisAsync(jobId, existingItem.AudioAnalysis);
+                                        logger.LogInformation("Задача {JobId}: Сохранены данные анализа аудио из кэша: BPM {Bpm}", 
+                                            jobId, existingItem.AudioAnalysis.tempo_bpm);
+                                    }
+                                    
+                                    // Останавливаем таймер для метрик (кэш-попадание)
+                                    _metricsCollector.StopTimer("download_video", jobId, isSuccess: true);
+                                    
+                                    // Очищаем временный файл
+                                    CleanupFile(tempFileManager, videoPath, logger, jobId);
+                                    
+                                    continue; // Переходим к следующей задаче
                                 }
-
-                                var totalTimeMs = (long)(DateTime.UtcNow - job.CreatedAt).TotalMilliseconds; // Время от создания задачи
-                                await conversionLogger.LogJobCompletedAsync(jobId, existingItem.AudioUrl, totalTimeMs);
-                                // ВАЖНО: Удаляем временный видеофайл, так как он больше не нужен
-                                CleanupFile(tempFileManager, videoPath, logger, jobId);
-                                continue; // Переходим к следующей задаче
+                            }
+                            catch (Exception cacheEx)
+                            {
+                                logger.LogError(cacheEx, "Задача {JobId}: Ошибка при проверке кэша по хешу {VideoHash}", jobId, videoHash);
+                                // Продолжаем обработку без кэша
                             }
 
+                            // Останавливаем таймер для метрик (успешная загрузка)
+                            _metricsCollector.StopTimer("download_video", jobId, isSuccess: true);
+
                             // Помещаем задачу в очередь конвертации
-                            await _channels.ConversionChannel.Writer.WriteAsync((jobId, videoPath, videoHash), stoppingToken);
-                            logger.LogInformation("Задача {JobId}: передана в очередь конвертации (файл {VideoPath}, хеш {VideoHash})", jobId, videoPath, videoHash);
-                            await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на конвертацию с хешем видео: {videoHash}");
+                            bool conversionQueueSuccess = _channels.ConversionChannel.Writer.TryWrite((jobId, videoPath, videoHash));
+                            if (conversionQueueSuccess)
+                            {
+                                logger.LogInformation("Задача {JobId}: передана в очередь конвертации (файл {VideoPath}, хеш {VideoHash})", jobId, videoPath, videoHash);
+                                await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на конвертацию с хешем видео: {videoHash}");
+                            }
+                            else
+                            {
+                                logger.LogWarning("Задача {JobId}: очередь конвертации переполнена, файлы будут очищены", jobId);
+                                await conversionLogger.LogErrorAsync(jobId, "Очередь конвертации переполнена", null, ConversionStatus.Failed);
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Очередь конвертации переполнена");
+                                // Очищаем временный файл, так как он не будет обработан
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                            }
                             
                             // НЕ удаляем videoPath здесь, он нужен для конвертации
 
@@ -228,6 +295,10 @@ namespace FileConverter.Services
                         {
                             // Логируем ошибку и обновляем статус задачи на Failed
                             logger.LogError(ex, "Задача {JobId}: Ошибка на этапе скачивания.", jobId);
+                            
+                            // Останавливаем таймер для метрик (неуспешная загрузка)
+                            _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
+                            
                             await conversionLogger.LogErrorAsync(jobId, $"Ошибка при скачивании видео: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка скачивания: {ex.Message}");
                             // Удаляем временный файл, если он был создан

@@ -14,6 +14,7 @@ namespace FileConverter.Services
         private readonly IConversionLogRepository _logRepository;
         private readonly ILogger<ConversionLogger> _logger;
         private readonly IJobRepository _jobRepository;
+        private readonly MetricsCollector _metricsCollector;
         
         // Отслеживание времени начала задач
         private readonly ConcurrentDictionary<string, Stopwatch> _jobTimers = new();
@@ -27,11 +28,13 @@ namespace FileConverter.Services
         public ConversionLogger(
             IConversionLogRepository logRepository,
             ILogger<ConversionLogger> logger,
-            IJobRepository jobRepository)
+            IJobRepository jobRepository,
+            MetricsCollector metricsCollector)
         {
             _logRepository = logRepository;
             _logger = logger;
             _jobRepository = jobRepository;
+            _metricsCollector = metricsCollector;
         }
         
         /// <inheritdoc/>
@@ -301,6 +304,9 @@ namespace FileConverter.Services
             _logger.LogInformation("Задача {JobId}: Выполнена успешно за {TotalTime:c}, MP3: {Mp3Url}", 
                 jobId, TimeSpan.FromMilliseconds(totalTimeMs), mp3Url);
             
+            // Записываем метрику успешной конвертации
+            _metricsCollector.RecordMetric("conversion_complete", totalTimeMs, isSuccess: true, jobId);
+            
             // Очищаем таймер стадии
             _stageTimers.TryRemove(jobId, out _);
         }
@@ -320,10 +326,18 @@ namespace FileConverter.Services
             
             _logger.LogError("Задача {JobId}: Ошибка: {ErrorMessage}", jobId, errorMessage);
             
-            // Останавливаем таймер задачи при финальной ошибке
+            // Записываем метрику неуспешной операции при финальной ошибке
             if (status == ConversionStatus.Failed)
             {
-                _jobTimers.TryRemove(jobId, out _);
+                // Получаем общее время выполнения задачи
+                long totalTimeMs = 0;
+                if (_jobTimers.TryRemove(jobId, out var stopwatch))
+                {
+                    stopwatch.Stop();
+                    totalTimeMs = stopwatch.ElapsedMilliseconds;
+                }
+                
+                _metricsCollector.RecordMetric("conversion_failed", totalTimeMs, isSuccess: false, jobId);
                 _stageTimers.TryRemove(jobId, out _);
             }
         }
@@ -358,6 +372,9 @@ namespace FileConverter.Services
             
             _logger.LogInformation("Задача {JobId}: Найден готовый результат конвертации, MP3: {Mp3Url}", 
                 jobId, mp3Url);
+            
+            // Записываем метрику кэш-попадания
+            _metricsCollector.RecordMetric("cache_hit", 0, isSuccess: true, jobId);
             
             // Очищаем таймеры, так как задача завершена
             _jobTimers.TryRemove(jobId, out _);

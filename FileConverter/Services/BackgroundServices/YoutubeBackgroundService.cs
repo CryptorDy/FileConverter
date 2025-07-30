@@ -152,7 +152,13 @@ namespace FileConverter.Services
 
                         await conversionLogger.LogDownloadCompletedAsync(jobId, mp3FileSize, mp3Path);
 
-                        await _channels.UploadChannel.Writer.WriteAsync((jobId, mp3Path, videoUrl, videoHash, new List<KeyframeInfo>()), stoppingToken);
+                        bool uploadQueueSuccess = _channels.UploadChannel.Writer.TryWrite((jobId, mp3Path, videoUrl, videoHash, new List<KeyframeInfo>()));
+                        if (!uploadQueueSuccess)
+                        {
+                            logger.LogWarning("Задача {JobId}: очередь загрузки переполнена", jobId);
+                            await conversionLogger.LogErrorAsync(jobId, "Очередь загрузки переполнена", null, ConversionStatus.Failed);
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Очередь загрузки переполнена");
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -171,18 +177,9 @@ namespace FileConverter.Services
                     }
                     finally
                     {
-                        // Очищаем временный MP3 файл
-                        if (!string.IsNullOrEmpty(mp3Path) && File.Exists(mp3Path))
-                        {
-                            try
-                            {
-                                logger.LogInformation("Задача {JobId}: Временный MP3 файл удален: {Mp3Path}", jobId, mp3Path);
-                            }
-                            catch (Exception cleanupEx)
-                            {
-                                logger.LogWarning(cleanupEx, "Задача {JobId}: Ошибка при удалении временного MP3 файла: {Mp3Path}", jobId, mp3Path);
-                            }
-                        }
+                        // Очищаем временный MP3 файл (ИСПРАВЛЕНО: добавлено фактическое удаление)
+                        var tempFileManager = scope.ServiceProvider.GetRequiredService<ITempFileManager>();
+                        CleanupFile(tempFileManager, mp3Path, logger, jobId);
                     }
                 }
                 catch (OperationCanceledException)
@@ -194,6 +191,29 @@ namespace FileConverter.Services
                 {
                     _logger.LogCritical(ex, "Критическая ошибка в YoutubeBackgroundService WorkerLoop.");
                     await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Стандартизированный метод очистки временных файлов (унификация с другими сервисами)
+        /// </summary>
+        private void CleanupFile(ITempFileManager tempFileManager, string path, ILogger logger, string jobId)
+        {
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                try
+                {
+                    tempFileManager.DeleteTempFile(path);
+                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап YouTube).", jobId, path);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Задача {JobId}: Ошибка при удалении временного файла: {Path} (этап YouTube)", jobId, path);
+                    // Логируем также через основной логгер задачи
+                    using var cleanupScope = _serviceProvider.CreateScope();
+                    var conversionLogger = cleanupScope.ServiceProvider.GetRequiredService<IConversionLogger>();
+                    conversionLogger.LogWarningAsync(jobId, $"Ошибка при удалении временного файла после YouTube обработки: {path}", ex.Message).GetAwaiter().GetResult();
                 }
             }
         }

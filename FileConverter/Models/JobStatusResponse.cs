@@ -15,6 +15,12 @@ namespace FileConverter.Models
         /// Информация о ключевых кадрах с таймкодами
         /// </summary>
         public List<KeyframeInfo>? Keyframes { get; set; }
+        
+        /// <summary>
+        /// Результат анализа аудиодорожки
+        /// </summary>
+        public AudioAnalysisData? AudioAnalysis { get; set; }
+        
         public string? ErrorMessage { get; set; }
         public double Progress { get; set; }
     }

@@ -249,5 +249,39 @@ namespace FileConverter.Data
                     .CountAsync();
             });
         }
+        
+        /// <summary>
+        /// Атомарно проверяет статус задачи и обновляет его если он соответствует ожидаемому
+        /// </summary>
+        public async Task<bool> TryUpdateJobStatusIfAsync(string jobId, ConversionStatus expectedStatus, ConversionStatus newStatus)
+        {
+            return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                // Используем ExecuteUpdateAsync для атомарного обновления
+                var rowsAffected = await dbContext.ConversionJobs
+                    .Where(j => j.Id == jobId && j.Status == expectedStatus)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(j => j.Status, newStatus)
+                        .SetProperty(j => j.LastAttemptAt, DateTime.UtcNow));
+                
+                return rowsAffected > 0;
+            });
+        }
+        
+        /// <summary>
+        /// Обновляет данные анализа аудио для задачи
+        /// </summary>
+        public async Task UpdateJobAudioAnalysisAsync(string jobId, AudioAnalysisData audioAnalysis)
+        {
+            await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                var job = await dbContext.ConversionJobs.FirstOrDefaultAsync(j => j.Id == jobId);
+                if (job != null)
+                {
+                    job.AudioAnalysis = audioAnalysis;
+                    await dbContext.SaveChangesAsync();
+                }
+            });
+        }
     }
 } 

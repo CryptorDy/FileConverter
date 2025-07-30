@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace FileConverter.Models
 {
@@ -21,5 +22,11 @@ namespace FileConverter.Models
         /// Длительность видео в секундах
         /// </summary>
         public double? DurationSeconds { get; set; }
+        
+        /// <summary>
+        /// Результат анализа аудиодорожки
+        /// </summary>
+        [Column(TypeName = "jsonb")]
+        public AudioAnalysisData? AudioAnalysis { get; set; }
     }
 } 

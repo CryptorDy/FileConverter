@@ -39,6 +39,12 @@ namespace FileConverter.Services
         /// </summary>
         public Channel<(string JobId, string VideoUrl)> YoutubeDownloadChannel { get; }
 
+        /// <summary>
+        /// Канал для задач на анализ аудио.
+        /// Содержит кортеж (JobId, Mp3Path, VideoPath, VideoHash).
+        /// </summary>
+        public Channel<(string JobId, string Mp3Path, string VideoPath, string VideoHash)> AudioAnalysisChannel { get; }
+
         public ProcessingChannels(IConfiguration configuration)
         {
             // Настройки размеров очередей из конфигурации с разумными значениями по умолчанию
@@ -47,11 +53,12 @@ namespace FileConverter.Services
             int keyframeExtractionQueueCapacity = configuration.GetValue<int>("Performance:KeyframeExtractionQueueCapacity", Math.Max(Environment.ProcessorCount, 4));
             int uploadQueueCapacity = configuration.GetValue<int>("Performance:UploadQueueCapacity", 10);
             int youtubeDownloadQueueCapacity = configuration.GetValue<int>("Performance:YoutubeDownloadQueueCapacity", 50);
+            int audioAnalysisQueueCapacity = configuration.GetValue<int>("Performance:AudioAnalysisQueueCapacity", Math.Max(Environment.ProcessorCount, 4));
 
             DownloadChannel = Channel.CreateBounded<(string JobId, string VideoUrl)>(
                 new BoundedChannelOptions(downloadQueueCapacity)
                 {
-                    FullMode = BoundedChannelFullMode.Wait, // Ожидать, если очередь полна
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна (предотвращение deadlock)
                     SingleWriter = false, // Несколько писателей (API, RecoveryService)
                     SingleReader = false // Несколько читателей (DownloadBackgroundService воркеры)
                 });
@@ -59,7 +66,7 @@ namespace FileConverter.Services
             ConversionChannel = Channel.CreateBounded<(string JobId, string VideoPath, string VideoHash)>(
                 new BoundedChannelOptions(conversionQueueCapacity)
                 {
-                    FullMode = BoundedChannelFullMode.Wait,
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна
                     SingleWriter = false, // Несколько писателей (DownloadBackgroundService воркеры)
                     SingleReader = false // Несколько читателей (ConversionBackgroundService воркеры)
                 });
@@ -67,7 +74,7 @@ namespace FileConverter.Services
             KeyframeExtractionChannel = Channel.CreateBounded<(string JobId, string VideoPath, string Mp3Path, string VideoHash)>(
                 new BoundedChannelOptions(keyframeExtractionQueueCapacity)
                 {
-                    FullMode = BoundedChannelFullMode.Wait,
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна
                     SingleWriter = false, // Несколько писателей (ConversionBackgroundService воркеры)
                     SingleReader = false // Несколько читателей (KeyframeExtractionBackgroundService воркеры)
                 });
@@ -75,7 +82,7 @@ namespace FileConverter.Services
             UploadChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash, List<KeyframeInfo> KeyframeInfos)>(
                 new BoundedChannelOptions(uploadQueueCapacity)
                 {
-                    FullMode = BoundedChannelFullMode.Wait,
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна
                     SingleWriter = false, // Несколько писателей (KeyframeExtractionBackgroundService воркеры)
                     SingleReader = false // Несколько читателей (UploadBackgroundService воркеры)
                 });
@@ -83,9 +90,17 @@ namespace FileConverter.Services
             YoutubeDownloadChannel = Channel.CreateBounded<(string JobId, string VideoUrl)>(
                 new BoundedChannelOptions(youtubeDownloadQueueCapacity)
                 {
-                    FullMode = BoundedChannelFullMode.Wait,
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна
                     SingleWriter = false, // Несколько писателей (API, RecoveryService)
                     SingleReader = false // Несколько читателей (YoutubeBackgroundService воркеры)
+                });
+
+            AudioAnalysisChannel = Channel.CreateBounded<(string JobId, string Mp3Path, string VideoPath, string VideoHash)>(
+                new BoundedChannelOptions(audioAnalysisQueueCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.DropWrite, // Отбрасываем новые записи, если очередь полна
+                    SingleWriter = false, // Несколько писателей (ConversionBackgroundService воркеры)
+                    SingleReader = false // Несколько читателей (AudioAnalysisBackgroundService воркеры)
                 });
         }
     }

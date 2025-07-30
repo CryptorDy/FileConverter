@@ -1,6 +1,7 @@
 using FileConverter.Data;
 using FileConverter.Models;
 using FileConverter.Services.Interfaces;
+using FileConverter.Helpers;
 // using Hangfire; // Удаляем зависимость от Hangfire Client
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration; // Добавляем для Configuration
@@ -17,30 +18,30 @@ namespace FileConverter.Services
         private readonly IJobRepository _repository;
         private readonly IMediaItemRepository _mediaItemRepository;
         // private readonly IBackgroundJobClient _backgroundJobClient; // Удаляем Hangfire Client
-        private readonly ProcessingChannels _channels; // Добавляем каналы
         private readonly IConversionLogger _conversionLogger; // Добавляем логгер конверсий
         private readonly ILogger<DbJobManager> _logger;
         private readonly IConfiguration _configuration;
-        private readonly IYoutubeDownloadService _youtubeDownloadService;
+        private readonly IVideoConverter _videoConverter;
+        private readonly UrlValidator _urlValidator;
         
         public DbJobManager(
             IJobRepository repository,
             IMediaItemRepository mediaItemRepository,
             // IBackgroundJobClient backgroundJobClient, // Удаляем Hangfire Client
-            ProcessingChannels channels, // Добавляем каналы
             IConversionLogger conversionLogger, // Добавляем логгер
             ILogger<DbJobManager> logger,
             IConfiguration configuration,
-            IYoutubeDownloadService youtubeDownloadService)
+            IVideoConverter videoConverter,
+            UrlValidator urlValidator)
         {
             _repository = repository;
             _mediaItemRepository = mediaItemRepository;
             // _backgroundJobClient = backgroundJobClient; // Удаляем Hangfire Client
-            _channels = channels; // Сохраняем каналы
             _conversionLogger = conversionLogger; // Сохраняем логгер
             _logger = logger;
             _configuration = configuration;
-            _youtubeDownloadService = youtubeDownloadService;
+            _videoConverter = videoConverter;
+            _urlValidator = urlValidator;
         }
 
         public async Task<ConversionJobResponse> EnqueueConversionJob(string videoUrl)
@@ -65,34 +66,19 @@ namespace FileConverter.Services
                 await _repository.CreateJobAsync(newJob);
                 await _conversionLogger.LogJobCreatedAsync(newJob.Id, newJob.VideoUrl); // Логируем создание задачи
                 
-                // Запускаем задачу НЕ через Hangfire, а добавляем в канал напрямую
+                // Запускаем обработку через VideoConverter (с проверкой кэша и валидацией)
                 try
                 {
-                    // Проверяем, является ли это YouTube видео
-                    if (_youtubeDownloadService.IsYoutubeUrl(newJob.VideoUrl))
-                    {
-                        await _channels.YoutubeDownloadChannel.Writer.WriteAsync((newJob.Id, newJob.VideoUrl));
-                        _logger.LogInformation("Задача {JobId} добавлена в очередь YouTube скачивания из EnqueueConversionJob.", newJob.Id);
-                        await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} добавлена в очередь YouTube скачивания.");
-                    }
-                    else
-                    {
-                        await _channels.DownloadChannel.Writer.WriteAsync((newJob.Id, newJob.VideoUrl));
-                        _logger.LogInformation("Задача {JobId} добавлена в очередь скачивания из EnqueueConversionJob.", newJob.Id);
-                        await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} добавлена в очередь скачивания.");
-                    }
+                    // Передаем задачу в VideoConverter для интеллектуальной обработки
+                    await _videoConverter.ProcessVideo(newJob.Id);
+                    _logger.LogInformation("Задача {JobId} передана в VideoConverter для обработки.", newJob.Id);
+                    await _conversionLogger.LogSystemInfoAsync($"Задача {newJob.Id} передана в VideoConverter для обработки.");
                 }
-                catch (ChannelClosedException chEx)
+                catch (Exception ex)
                 {
-                    _logger.LogError(chEx, "Не удалось записать задачу {JobId} в очередь скачивания (канал закрыт) из EnqueueConversionJob.", newJob.Id);
-                    await _conversionLogger.LogErrorAsync(newJob.Id, "Не удалось добавить задачу в очередь скачивания (канал закрыт).", chEx.StackTrace);
-                    throw new InvalidOperationException($"Не удалось добавить задачу {newJob.Id} в очередь обработки (канал закрыт).", chEx);
-                }
-                 catch (Exception writeEx)
-                {
-                    _logger.LogError(writeEx, "Не удалось записать задачу {JobId} в очередь скачивания из EnqueueConversionJob.", newJob.Id);
-                    await _conversionLogger.LogErrorAsync(newJob.Id, $"Не удалось добавить задачу в очередь скачивания: {writeEx.Message}", writeEx.StackTrace);
-                    throw new InvalidOperationException($"Не удалось добавить задачу {newJob.Id} в очередь обработки.", writeEx);
+                    _logger.LogError(ex, "Не удалось обработать задачу {JobId} через VideoConverter.", newJob.Id);
+                    await _conversionLogger.LogErrorAsync(newJob.Id, $"Ошибка при обработке через VideoConverter: {ex.Message}", ex.StackTrace);
+                    throw new InvalidOperationException($"Не удалось инициировать обработку задачи {newJob.Id}.", ex);
                 }
                 
                 // Формируем URL для проверки статуса
@@ -145,10 +131,17 @@ namespace FileConverter.Services
                     continue; // Пропускаем пустые URL
                 }
 
-                string? currentJobId = null;
+                // Валидируем URL на раннем этапе
+                if (!_urlValidator.IsUrlValid(videoUrl))
+                {
+                    _logger.LogWarning("Пропущен небезопасный URL {VideoUrl} в пакете {BatchId}", videoUrl, batchJob.Id);
+                    continue; // Пропускаем небезопасные URL
+                }
+
+                ConversionJob? job = null;
                 try 
                 { 
-                    var job = new ConversionJob 
+                    job = new ConversionJob 
                     { 
                         VideoUrl = videoUrl,
                         Status = ConversionStatus.Pending,
@@ -156,7 +149,6 @@ namespace FileConverter.Services
                         CreatedAt = DateTime.UtcNow,
                         LastAttemptAt = DateTime.UtcNow
                     };
-                    currentJobId = job.Id;
                         
                     await _repository.CreateJobAsync(job);
                     await _conversionLogger.LogJobCreatedAsync(job.Id, job.VideoUrl, job.BatchId); // Логируем создание
@@ -171,56 +163,48 @@ namespace FileConverter.Services
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Ошибка при создании задачи {JobId} для URL {VideoUrl} в пакете {BatchId}", currentJobId ?? "N/A", videoUrl, batchJob.Id);
-                     if(currentJobId != null) 
-                     {
-                         await _conversionLogger.LogErrorAsync(currentJobId, $"Ошибка при создании задачи в пакете {batchJob.Id}: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
-                         // Статус Failed можно не ставить, т.к. задача даже не создалась
-                     }
-                     // Не прерываем весь пакет, но логируем ошибку
+                    var jobIdForLog = job?.Id ?? "не создан";
+                    _logger.LogError(ex, "Ошибка при создании задачи {JobId} для URL {VideoUrl} в пакете {BatchId}", jobIdForLog, videoUrl, batchJob.Id);
+                    
+                    // Логируем ошибку только если задача была создана (имеет ID)
+                    if (job != null && !string.IsNullOrEmpty(job.Id)) 
+                    {
+                        try
+                        {
+                            await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка при создании задачи в пакете {batchJob.Id}: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
+                        }
+                        catch (Exception logEx)
+                        {
+                            _logger.LogError(logEx, "Не удалось записать ошибку в ConversionLogger для задачи {JobId}", job.Id);
+                        }
+                    }
+                    // Не прерываем весь пакет, но логируем ошибку
                 }
             }
 
             _logger.LogInformation("Создано {CreatedCount} задач для пакета {BatchId}. Добавление в очередь...", createdJobs.Count, batchJob.Id);
 
-            // Шаг 2: Ставим созданные задачи в очередь обработки
+            // Шаг 2: Ставим созданные задачи в обработку через VideoConverter
             int queuedCount = 0;
             foreach(var jobInfo in createdJobs)
             {
                  try 
                  { 
-                     // Проверяем, является ли это YouTube видео
-                     if (_youtubeDownloadService.IsYoutubeUrl(jobInfo.VideoUrl))
-                     {
-                         await _channels.YoutubeDownloadChannel.Writer.WriteAsync((jobInfo.JobId, jobInfo.VideoUrl));
-                         _logger.LogInformation("Задача {JobId} из пакета {BatchId} добавлена в очередь YouTube скачивания.", jobInfo.JobId, batchJob.Id);
-                         await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) добавлена в очередь YouTube скачивания.");
-                     }
-                     else
-                     {
-                         await _channels.DownloadChannel.Writer.WriteAsync(jobInfo);
-                         _logger.LogInformation("Задача {JobId} из пакета {BatchId} добавлена в очередь скачивания.", jobInfo.JobId, batchJob.Id);
-                         await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) добавлена в очередь скачивания.");
-                     }
+                     // Передаем задачу в VideoConverter для интеллектуальной обработки
+                     await _videoConverter.ProcessVideo(jobInfo.JobId);
+                     _logger.LogInformation("Задача {JobId} из пакета {BatchId} передана в VideoConverter для обработки.", jobInfo.JobId, batchJob.Id);
+                     await _conversionLogger.LogSystemInfoAsync($"Задача {jobInfo.JobId} (пакет {batchJob.Id}) передана в VideoConverter для обработки.");
                      queuedCount++;
-                 }
-                 catch (ChannelClosedException chEx) 
-                 {
-                     _logger.LogError(chEx, "Не удалось записать задачу {JobId} из пакета {BatchId} в очередь скачивания (канал закрыт).", jobInfo.JobId, batchJob.Id);
-                      await _conversionLogger.LogErrorAsync(jobInfo.JobId, "Не удалось добавить задачу в очередь скачивания (канал закрыт).", chEx.StackTrace);
-                      await DbJobManager.UpdateJobStatusAsync(_repository, jobInfo.JobId, ConversionStatus.Failed, errorMessage: "Ошибка постановки в очередь (канал закрыт)");
-                      // Прерываем добавление остальных задач, если канал закрыт?
-                      // break;
                  }
                  catch (Exception ex)
                  {
-                     _logger.LogError(ex, "Ошибка при добавлении задачи {JobId} из пакета {BatchId} в очередь скачивания.", jobInfo.JobId, batchJob.Id);
-                      await _conversionLogger.LogErrorAsync(jobInfo.JobId, $"Ошибка при добавлении задачи в очередь скачивания: {ex.Message}", ex.StackTrace);
-                      // Обновляем статус на Failed, так как задача создана, но не попала в очередь
-                      await DbJobManager.UpdateJobStatusAsync(_repository, jobInfo.JobId, ConversionStatus.Failed, errorMessage: $"Ошибка постановки в очередь: {ex.Message}");
+                     _logger.LogError(ex, "Ошибка при обработке задачи {JobId} из пакета {BatchId} через VideoConverter.", jobInfo.JobId, batchJob.Id);
+                      await _conversionLogger.LogErrorAsync(jobInfo.JobId, $"Ошибка при обработке через VideoConverter: {ex.Message}", ex.StackTrace);
+                      // Обновляем статус на Failed, так как задача создана, но не удалось инициировать обработку
+                      await DbJobManager.UpdateJobStatusAsync(_repository, jobInfo.JobId, ConversionStatus.Failed, errorMessage: $"Ошибка инициации обработки: {ex.Message}");
                  }
             }
-             _logger.LogInformation("{QueuedCount} из {CreatedCount} задач пакета {BatchId} успешно добавлены в очередь.", queuedCount, createdJobs.Count, batchJob.Id);
+             _logger.LogInformation("{QueuedCount} из {CreatedCount} задач пакета {BatchId} успешно переданы в VideoConverter для обработки.", queuedCount, createdJobs.Count, batchJob.Id);
 
             // Возвращаем результат с ID пакета
             return new BatchJobResult
@@ -247,6 +231,7 @@ namespace FileConverter.Services
                 NewVideoUrl = job.NewVideoUrl, 
                 Mp3Url = job.Mp3Url,
                 Keyframes = job.Keyframes, // Используем данные прямо из БД
+                AudioAnalysis = job.AudioAnalysis, // Добавляем данные анализа аудио
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status) 
             };
@@ -270,6 +255,7 @@ namespace FileConverter.Services
                 NewVideoUrl = job.NewVideoUrl,
                 Mp3Url = job.Mp3Url,
                 Keyframes = job.Keyframes,
+                AudioAnalysis = job.AudioAnalysis, // Добавляем данные анализа аудио
                 ErrorMessage = job.ErrorMessage,
                 Progress = GetProgressFromStatus(job.Status)
             }).ToList();
@@ -283,8 +269,11 @@ namespace FileConverter.Services
             {
                 JobId = j.Id,
                 Status = j.Status,
-                 VideoUrl = j.VideoUrl, 
+                VideoUrl = j.VideoUrl, 
+                NewVideoUrl = j.NewVideoUrl,
                 Mp3Url = j.Mp3Url,
+                Keyframes = j.Keyframes,
+                AudioAnalysis = j.AudioAnalysis, // Добавляем данные анализа аудио
                 ErrorMessage = j.ErrorMessage,
                 Progress = GetProgressFromStatus(j.Status)
             }).ToList();
@@ -308,9 +297,11 @@ namespace FileConverter.Services
             return status switch
             {
                 ConversionStatus.Pending => 0,
-                ConversionStatus.Downloading => 25, 
-                ConversionStatus.Converting => 50,  
-                ConversionStatus.Uploading => 75,   
+                ConversionStatus.Downloading => 20, 
+                ConversionStatus.Converting => 40,
+                ConversionStatus.AudioAnalyzing => 60,
+                ConversionStatus.ExtractingKeyframes => 70,
+                ConversionStatus.Uploading => 85,   
                 ConversionStatus.Completed => 100,
                 ConversionStatus.Failed => 0,    
                 _ => 0
