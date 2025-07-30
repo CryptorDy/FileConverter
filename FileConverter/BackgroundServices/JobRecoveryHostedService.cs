@@ -38,7 +38,7 @@ namespace FileConverter.BackgroundServices
             _logger.LogInformation("Служба восстановления и очистки логов запускается.");
 
             // Запускаем таймер для восстановления зависших заданий
-            var recoveryIntervalMinutes = _configuration.GetValue<int>("Performance:RecoveryCheckIntervalMinutes", 10);
+            var recoveryIntervalMinutes = _configuration.GetValue<double>("Performance:RecoveryCheckIntervalMinutes", 10);
             var recoveryInterval = TimeSpan.FromMinutes(recoveryIntervalMinutes);
             _recoveryTimer = new Timer(DoRecoveryWork, null, TimeSpan.Zero, recoveryInterval); // Запустить сразу и потом по интервалу
 

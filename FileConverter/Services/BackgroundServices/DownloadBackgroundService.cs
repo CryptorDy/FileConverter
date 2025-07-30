@@ -158,7 +158,53 @@ namespace FileConverter.Services.BackgroundServices
                                 using (var fileStream = File.Create(videoPath))
                                 using (var httpStream = await response.Content.ReadAsStreamAsync(stoppingToken))
                                 {
-                                    await httpStream.CopyToAsync(fileStream, stoppingToken);
+                                    // Добавляем дополнительный timeout для streaming операций
+                                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+                                    using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
+                                    
+                                    // Логирование прогресса загрузки
+                                    var startTime = DateTime.UtcNow;
+                                    long totalBytesDownloaded = 0;
+                                    var buffer = new byte[81920]; // 80KB буфер
+                                    int bytesRead;
+                                    var lastLogTime = DateTime.UtcNow;
+                                    
+                                    logger.LogInformation("Задача {JobId}: начата потоковая загрузка файла", jobId);
+                                    
+                                    try
+                                    {
+                                        while ((bytesRead = await httpStream.ReadAsync(buffer, 0, buffer.Length, combinedCts.Token)) > 0)
+                                        {
+                                            await fileStream.WriteAsync(buffer, 0, bytesRead, combinedCts.Token);
+                                            totalBytesDownloaded += bytesRead;
+                                            
+                                            // Логируем прогресс каждые 5 секунд
+                                            if ((DateTime.UtcNow - lastLogTime).TotalSeconds >= 5)
+                                            {
+                                                var downloadedMB = totalBytesDownloaded / (1024.0 * 1024.0);
+                                                var elapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+                                                var speedMBps = downloadedMB / elapsedSeconds;
+                                                
+                                                logger.LogInformation("Задача {JobId}: загружено {DownloadedMB:F2} МБ, скорость {Speed:F2} МБ/с", 
+                                                    jobId, downloadedMB, speedMBps);
+                                                    
+                                                lastLogTime = DateTime.UtcNow;
+                                            }
+                                        }
+                                        
+                                        await fileStream.FlushAsync(combinedCts.Token);
+                                        
+                                        var finalSizeMB = totalBytesDownloaded / (1024.0 * 1024.0);
+                                        var totalElapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+                                        logger.LogInformation("Задача {JobId}: загрузка завершена, {FinalSize:F2} МБ за {ElapsedSeconds:F1} сек", 
+                                            jobId, finalSizeMB, totalElapsedSeconds);
+                                    }
+                                    catch (OperationCanceledException) when (timeoutCts.Token.IsCancellationRequested)
+                                    {
+                                        logger.LogError("Задача {JobId}: превышен таймаут загрузки (3 мин), загружено {DownloadedMB:F2} МБ", 
+                                            jobId, totalBytesDownloaded / (1024.0 * 1024.0));
+                                        throw new TimeoutException($"Превышен таймаут (3 мин) при загрузке файла: {videoUrl}");
+                                    }
                                 }
 
                                 var fileInfo = new FileInfo(videoPath);
@@ -265,6 +311,23 @@ namespace FileConverter.Services.BackgroundServices
                             logger.LogInformation("Обработка задачи {JobId} отменена.", jobId);
                             // Статус задачи не меняем, она может быть подхвачена снова или обработана JobRecoveryService
                             // Важно очистить временный файл, если он был создан
+                            if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
+                            {
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                            }
+                        }
+                        catch (TimeoutException timeoutEx)
+                        {
+                            // Специальная обработка таймаутов загрузки
+                            logger.LogError(timeoutEx, "Задача {JobId}: Превышен таймаут загрузки: {Message}", jobId, timeoutEx.Message);
+                            
+                            // Останавливаем таймер для метрик (таймаут)
+                            _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
+                            
+                            await conversionLogger.LogErrorAsync(jobId, $"Таймаут загрузки: {timeoutEx.Message}", timeoutEx.StackTrace, ConversionStatus.Failed);
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Таймаут загрузки: {timeoutEx.Message}");
+                            
+                            // Удаляем частично загруженный файл
                             if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
                             {
                                 CleanupFile(tempFileManager, videoPath, logger, jobId);
