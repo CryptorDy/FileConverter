@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Xabe.FFmpeg;
 using Xabe.FFmpeg.Events;
+using Polly;
 
 namespace FileConverter.Services
 {
@@ -127,97 +128,135 @@ namespace FileConverter.Services
                             mp3Path = tempFileManager.CreateTempFile(".mp3");
                             logger.LogInformation("Задача {JobId}: создан временный MP3 файл {Mp3Path}", jobId, mp3Path);
 
-                            // Получаем информацию о медиафайле
-                            logger.LogDebug("Задача {JobId}: получение информации о медиафайле {VideoPath}", jobId, videoPath);
-                            IMediaInfo mediaInfo = await FFmpeg.GetMediaInfo(videoPath, stoppingToken);
-                            logger.LogDebug("Задача {JobId}: информация получена, длительность {Duration}", jobId, mediaInfo.Duration);
-
-                            if (mediaInfo.AudioStreams?.Any() != true)
-                            {
-                                throw new InvalidOperationException("Аудиопоток не найден в видеофайле.");
-                            }
-                            
-                            // Обновляем задачу информацией о временных путях (на случай восстановления)
-                            // Эта информация не сохраняется в БД через атрибут [NotMapped]
-                            job.TempVideoPath = videoPath; 
-                            job.TempMp3Path = mp3Path; 
-                            // Не вызываем UpdateJobAsync здесь, т.к. эти поля не маппятся
-
-                            // Настраиваем конвертацию
-                            var conversion = FFmpeg.Conversions.New()
-                                .AddStream(mediaInfo.AudioStreams.First()) // Берем первый аудиопоток
-                                .SetOutputFormat("mp3")
-                                .SetAudioBitrate(128000) // 128 kbps
-                                .SetOutput(mp3Path);
-                                
-                            await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Запуск FFmpeg: {conversion.Build()}");
-                            logger.LogInformation("Задача {JobId}: запуск конвертации FFmpeg...", jobId);
-
-                            // Обработка прогресса с throttling
-                            DateTime lastLogTime = DateTime.MinValue;
-                            DateTime lastHeartbeatTime = DateTime.UtcNow;
-                            double lastLoggedPercent = -1;
-                            conversion.OnProgress += async (sender, args) => {
-                                var now = DateTime.UtcNow;
-                                var percentDiff = Math.Abs(args.Percent - lastLoggedPercent);
-                                var timeDiff = (now - lastLogTime).TotalSeconds;
-                                var heartbeatDiff = (now - lastHeartbeatTime).TotalMinutes;
-                                
-                                // Логируем только если прошло 10 секунд ИЛИ прогресс изменился на 5%+
-                                if (timeDiff >= 10 || percentDiff >= 5 || args.Percent >= 99)
-                                {
-                                    await conversionLogger.LogConversionProgressAsync(jobId, args.Percent, args.TotalLength.TotalSeconds - args.Duration.TotalSeconds);
-                                    lastLogTime = now;
-                                    lastLoggedPercent = args.Percent;
-                                    logger.LogTrace("Задача {JobId}: прогресс конвертации {Percent:F1}%", jobId, args.Percent);
-                                }
-                                
-                                // Heartbeat: обновляем LastAttemptAt каждую минуту для предотвращения ложного восстановления
-                                if (heartbeatDiff >= 1)
-                                {
-                                    try
+                            // Настройка Polly retry policy для FFmpeg конвертации
+                            var retryPolicy = Policy
+                                .Handle<Exception>(ex => !(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+                                .WaitAndRetryAsync(
+                                    retryCount: 2, // Меньше попыток для конвертации, т.к. она более ресурсоемкая
+                                    sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(5 * retryAttempt), // 5, 10 секунд
+                                    onRetry: (outcome, timespan, retryCount, context) =>
                                     {
-                                        var currentJob = await jobRepository.GetJobByIdAsync(jobId);
-                                        if (currentJob != null && currentJob.Status == ConversionStatus.Converting)
+                                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/2 конвертации неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
+                                            jobId, retryCount, timespan.TotalSeconds, outcome.Exception?.Message ?? "Unknown");
+                                        
+                                        // Очищаем частично созданный MP3 файл перед повтором
+                                        if (!string.IsNullOrEmpty(mp3Path) && File.Exists(mp3Path))
                                         {
-                                            currentJob.LastAttemptAt = DateTime.UtcNow;
-                                            await jobRepository.UpdateJobAsync(currentJob);
-                                            logger.LogTrace("Задача {JobId}: heartbeat - обновлен LastAttemptAt", jobId);
+                                            try 
+                                            { 
+                                                File.Delete(mp3Path); 
+                                                logger.LogDebug("Удален частично созданный MP3 файл: {Mp3Path}", mp3Path); 
+                                            } 
+                                            catch (Exception cleanupEx) 
+                                            { 
+                                                logger.LogWarning("Не удалось удалить MP3 файл {Mp3Path}: {Error}", mp3Path, cleanupEx.Message); 
+                                            }
                                         }
-                                        lastHeartbeatTime = now;
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        logger.LogWarning(ex, "Задача {JobId}: ошибка heartbeat при обновлении LastAttemptAt", jobId);
-                                    }
-                                }
-                            };
+                                        
+                                        // Пересоздаем MP3 файл для следующей попытки
+                                        mp3Path = tempFileManager.CreateTempFile(".mp3");
+                                        logger.LogInformation("Задача {JobId}: пересоздан MP3 файл для повторной попытки: {Mp3Path}", jobId, mp3Path);
+                                    });
 
-                            // Запускаем конвертацию с тайм-аутом
-                            using var timeoutCts = new CancellationTokenSource();
-                            using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
-                            
-                            // Устанавливаем тайм-аут 5 минут для конвертации
-                            timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
-                            
-                            IConversionResult result = await conversion.Start(combinedCts.Token);
-                            
-                            logger.LogInformation("Задача {JobId}: конвертация FFmpeg завершена.", jobId);
-                            await conversionLogger.LogSystemInfoAsync($"Конвертация завершена для задания {jobId}");
-
-                            if (!File.Exists(mp3Path))
+                            // Выполняем конвертацию с retry
+                            await retryPolicy.ExecuteAsync(async () =>
                             {
-                                throw new InvalidOperationException($"Конвертация завершена, но MP3 файл не найден по пути: {mp3Path}");
-                            }
+                                logger.LogInformation("Задача {JobId}: начинаем попытку FFmpeg конвертации", jobId);
+                                
+                                // Получаем информацию о медиафайле
+                                logger.LogDebug("Задача {JobId}: получение информации о медиафайле {VideoPath}", jobId, videoPath);
+                                IMediaInfo mediaInfo = await FFmpeg.GetMediaInfo(videoPath, stoppingToken);
+                                logger.LogDebug("Задача {JobId}: информация получена, длительность {Duration}", jobId, mediaInfo.Duration);
 
-                            var fileInfo = new FileInfo(mp3Path);
-                            var mp3FileSize = fileInfo.Length;
-                            
-                            await conversionLogger.LogConversionCompletedAsync(jobId, mp3FileSize, mediaInfo.Duration.TotalSeconds, mp3Path);
-                             logger.LogInformation("Задача {JobId}: конвертация успешно завершена. MP3 файл: {Mp3Path}, Размер: {FileSize} байт", jobId, mp3Path, mp3FileSize);
+                                if (mediaInfo.AudioStreams?.Any() != true)
+                                {
+                                    throw new InvalidOperationException("Аудиопоток не найден в видеофайле.");
+                                }
+                                
+                                // Обновляем задачу информацией о временных путях (на случай восстановления)
+                                // Эта информация не сохраняется в БД через атрибут [NotMapped]
+                                job.TempVideoPath = videoPath; 
+                                job.TempMp3Path = mp3Path; 
+                                // Не вызываем UpdateJobAsync здесь, т.к. эти поля не маппятся
 
-                            // Останавливаем таймер для метрик (успешная конвертация)
-                            _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: true);
+                                // Настраиваем конвертацию
+                                var conversion = FFmpeg.Conversions.New()
+                                    .AddStream(mediaInfo.AudioStreams.First()) // Берем первый аудиопоток
+                                    .SetOutputFormat("mp3")
+                                    .SetAudioBitrate(128000) // 128 kbps
+                                    .SetOutput(mp3Path);
+                                    
+                                await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Запуск FFmpeg: {conversion.Build()}");
+                                logger.LogInformation("Задача {JobId}: запуск конвертации FFmpeg...", jobId);
+
+                                // Обработка прогресса с throttling
+                                DateTime lastLogTime = DateTime.MinValue;
+                                DateTime lastHeartbeatTime = DateTime.UtcNow;
+                                double lastLoggedPercent = -1;
+                                conversion.OnProgress += async (sender, args) => {
+                                    var now = DateTime.UtcNow;
+                                    var percentDiff = Math.Abs(args.Percent - lastLoggedPercent);
+                                    var timeDiff = (now - lastLogTime).TotalSeconds;
+                                    var heartbeatDiff = (now - lastHeartbeatTime).TotalMinutes;
+                                    
+                                    // Логируем только если прошло 10 секунд ИЛИ прогресс изменился на 5%+
+                                    if (timeDiff >= 10 || percentDiff >= 5 || args.Percent >= 99)
+                                    {
+                                        await conversionLogger.LogConversionProgressAsync(jobId, args.Percent, args.TotalLength.TotalSeconds - args.Duration.TotalSeconds);
+                                        lastLogTime = now;
+                                        lastLoggedPercent = args.Percent;
+                                        logger.LogTrace("Задача {JobId}: прогресс конвертации {Percent:F1}%", jobId, args.Percent);
+                                    }
+                                    
+                                    // Heartbeat: обновляем LastAttemptAt каждую минуту для предотвращения ложного восстановления
+                                    if (heartbeatDiff >= 1)
+                                    {
+                                        try
+                                        {
+                                            var currentJob = await jobRepository.GetJobByIdAsync(jobId);
+                                            if (currentJob != null && currentJob.Status == ConversionStatus.Converting)
+                                            {
+                                                currentJob.LastAttemptAt = DateTime.UtcNow;
+                                                await jobRepository.UpdateJobAsync(currentJob);
+                                                logger.LogTrace("Задача {JobId}: heartbeat - обновлен LastAttemptAt", jobId);
+                                            }
+                                            lastHeartbeatTime = now;
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            logger.LogWarning(ex, "Задача {JobId}: ошибка heartbeat при обновлении LastAttemptAt", jobId);
+                                        }
+                                    }
+                                };
+
+                                // Запускаем конвертацию с тайм-аутом
+                                using var timeoutCts = new CancellationTokenSource();
+                                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);
+                                
+                                // Устанавливаем тайм-аут 5 минут для конвертации
+                                timeoutCts.CancelAfter(TimeSpan.FromMinutes(5));
+                                
+                                IConversionResult result = await conversion.Start(combinedCts.Token);
+                                
+                                logger.LogInformation("Задача {JobId}: конвертация FFmpeg завершена.", jobId);
+                                await conversionLogger.LogSystemInfoAsync($"Конвертация завершена для задания {jobId}");
+
+                                if (!File.Exists(mp3Path))
+                                {
+                                    throw new InvalidOperationException($"Конвертация завершена, но MP3 файл не найден по пути: {mp3Path}");
+                                }
+
+                                var fileInfo = new FileInfo(mp3Path);
+                                var mp3FileSize = fileInfo.Length;
+                                
+                                await conversionLogger.LogConversionCompletedAsync(jobId, mp3FileSize, mediaInfo.Duration.TotalSeconds, mp3Path);
+                                logger.LogInformation("Задача {JobId}: конвертация успешно завершена. MP3 файл: {Mp3Path}, Размер: {FileSize} байт", jobId, mp3Path, mp3FileSize);
+
+                                // Останавливаем таймер для метрик (успешная конвертация)
+                                _metricsCollector.StopTimer("conversion_video_to_mp3", jobId, isSuccess: true);
+                                
+                                logger.LogInformation("Задача {JobId}: успешная FFmpeg конвертация", jobId);
+                            });
 
                             // Помещаем задачу в очередь анализа аудио
                             bool audioAnalysisQueueSuccess = _channels.AudioAnalysisChannel.Writer.TryWrite((jobId, mp3Path, videoPath, videoHash));

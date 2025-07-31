@@ -11,6 +11,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using Polly;
 
 namespace FileConverter.Services
 {
@@ -132,32 +133,62 @@ namespace FileConverter.Services
 
                             logger.LogInformation("Задача {JobId}: запуск анализа аудио с Essentia...", jobId);
 
-                            // Выполняем анализ аудио с защитой от сбоев native кода
-                            string analysisJsonResult;
-                            try
-                            {
-                                analysisJsonResult = audioAnalyzer.AnalyzeFromFile(mp3Path);
-                            }
-                        catch (AccessViolationException avEx)
-                        {
-                            throw new InvalidOperationException("Критическая ошибка в native библиотеке Essentia (AccessViolation)", avEx);
-                        }
-                        catch (SEHException sehEx)
-                        {
-                            throw new InvalidOperationException("Ошибка Structured Exception Handling в native библиотеке Essentia", sehEx);
-                        }
-                        catch (Exception nativeEx) when (nativeEx.GetType().Name.Contains("External"))
-                        {
-                            throw new InvalidOperationException($"Ошибка внешней библиотеки Essentia: {nativeEx.Message}", nativeEx);
-                        }
-                        
-                        if (string.IsNullOrEmpty(analysisJsonResult))
-                        {
-                            throw new InvalidOperationException("Анализ аудио вернул пустой результат");
-                        }
+                            // Настройка Polly retry policy для анализа аудио
+                            var retryPolicy = Policy
+                                .Handle<Exception>(ex => !(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+                                .WaitAndRetryAsync(
+                                    retryCount: 2, // 2 попытки для анализа
+                                    sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(3 * retryAttempt), // 3, 6 секунд
+                                    onRetry: (outcome, timespan, retryCount, context) =>
+                                    {
+                                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/2 анализа аудио неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
+                                            jobId, retryCount, timespan.TotalSeconds, outcome?.Message ?? "Unknown");
+                                    });
 
-                        // Останавливаем таймер для метрик (успешный анализ аудио)
-                        _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
+                            // Выполняем анализ аудио с retry
+                            string analysisJsonResult = await retryPolicy.ExecuteAsync(async () =>
+                            {
+                                logger.LogInformation("Задача {JobId}: начинаем попытку анализа аудио", jobId);
+                                
+                                // Выполняем анализ аудио с защитой от сбоев native кода
+                                string result;
+                                
+                                // Создаем CancellationTokenSource для тайм-аута
+                                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+                                try
+                                {
+                                    // Добавляем тайм-аут для native вызова
+                                    var task = Task.Run(() => audioAnalyzer.AnalyzeFromFile(mp3Path), timeoutCts.Token);
+                                    result = await task;
+                                }
+                                catch (AccessViolationException avEx)
+                                {
+                                    throw new InvalidOperationException("Критическая ошибка в native библиотеке Essentia (AccessViolation)", avEx);
+                                }
+                                catch (SEHException sehEx)
+                                {
+                                    throw new InvalidOperationException("Ошибка Structured Exception Handling в native библиотеке Essentia", sehEx);
+                                }
+                                catch (Exception nativeEx) when (nativeEx.GetType().Name.Contains("External"))
+                                {
+                                    throw new InvalidOperationException($"Ошибка внешней библиотеки Essentia: {nativeEx.Message}", nativeEx);
+                                }
+                                catch (OperationCanceledException) when (timeoutCts.Token.IsCancellationRequested)
+                                {
+                                    throw new TimeoutException("Превышен тайм-аут анализа аудио (3 мин)");
+                                }
+                                
+                                if (string.IsNullOrEmpty(result))
+                                {
+                                    throw new InvalidOperationException("Анализ аудио вернул пустой результат");
+                                }
+                                
+                                logger.LogInformation("Задача {JobId}: успешный анализ аудио", jobId);
+                                return result;
+                            });
+
+                            // Останавливаем таймер для метрик (успешный анализ аудио)
+                            _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
                         
                         // Добавляем подробное логгирование сырого JSON-ответа
                         logger.LogInformation("Задача {JobId}: Получен сырой JSON от Essentia: {RawJson}", jobId, analysisJsonResult);

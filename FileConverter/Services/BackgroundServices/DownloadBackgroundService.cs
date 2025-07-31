@@ -1,18 +1,7 @@
-using System;
-using System.IO;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
 using FileConverter.Data;
 using FileConverter.Models;
 using FileConverter.Services.Interfaces;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Configuration;
-using Newtonsoft.Json;
 using Polly;
-using Polly.Extensions.Http;
 
 namespace FileConverter.Services.BackgroundServices
 {
@@ -149,7 +138,7 @@ namespace FileConverter.Services.BackgroundServices
                                     onRetry: (outcome, timespan, retryCount, context) =>
                                     {
                                         logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/3 загрузки неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
-                                            jobId, retryCount, timespan.TotalSeconds, outcome.Exception?.Message ?? "Unknown");
+                                            jobId, retryCount, timespan.TotalSeconds, outcome?.Message ?? "Unknown");
                                         
                                         // Очищаем частично загруженный файл перед повтором
                                         if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
