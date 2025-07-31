@@ -137,7 +137,7 @@ namespace FileConverter.Services
                                     onRetry: (outcome, timespan, retryCount, context) =>
                                     {
                                         logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/2 конвертации неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
-                                            jobId, retryCount, timespan.TotalSeconds, outcome.Exception?.Message ?? "Unknown");
+                                            jobId, retryCount, timespan.TotalSeconds, outcome?.Message ?? "Unknown");
                                         
                                         // Очищаем частично созданный MP3 файл перед повтором
                                         if (!string.IsNullOrEmpty(mp3Path) && File.Exists(mp3Path))
