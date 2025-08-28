@@ -150,9 +150,7 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
 
         var currentKey = _currentProxy != null ? GetProxyKey(_currentProxy) : "нет";
 
-        _logger.LogInformation("=== СТАТУС ПРОКСИ СЕРВЕРОВ ===");
-        _logger.LogInformation("Всего прокси: {Count}", _proxyStates.Count);
-        _logger.LogInformation("Текущий прокси: {Key}", currentKey);
+        // Логирование статуса прокси убрано для уменьшения количества логов
 
         foreach (var kvp in _proxyStates)
         {
@@ -167,18 +165,10 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
                 statsInfo = $", Запросов: {stats.RequestCount}, Успешных: {stats.SuccessCount}, Ошибок: {stats.ErrorCount}, Байт: {FormatBytes(stats.BytesTransferred)}";
             }
 
-            _logger.LogInformation(
-                "Прокси {Host}:{Port} - {Status}{Current}, Ошибок: {ErrorCount}, Последняя проверка: {LastChecked}{Stats}",
-                state.Host,
-                state.Port,
-                status,
-                current,
-                state.ErrorCount,
-                state.LastChecked.ToString("yyyy-MM-dd HH:mm:ss"),
-                statsInfo);
+            // Логирование деталей прокси убрано для уменьшения количества логов
         }
 
-        _logger.LogInformation("===============================");
+        // Разделитель убран для уменьшения количества логов
     }
 
     /// <summary>
@@ -204,7 +194,7 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
     /// </summary>
     private async Task CheckAllProxies()
     {
-        _logger.LogInformation("Начало периодической проверки всех прокси серверов...");
+        // Логирование начала проверки прокси убрано для уменьшения количества логов
 
         try
         {
@@ -228,7 +218,7 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
 
             int availableCount = results.Count(r => r.isAvailable);
 
-            _logger.LogInformation("Проверка прокси завершена. Доступно: {Available} из {Total}", availableCount, proxiesToCheck.Count);
+            // Логирование завершения проверки прокси убрано для уменьшения количества логов
 
             if (availableCount == 0 && this.UseProxy)
             {

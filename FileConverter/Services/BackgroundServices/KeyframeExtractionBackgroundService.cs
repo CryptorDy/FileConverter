@@ -38,13 +38,11 @@ namespace FileConverter.Services.BackgroundServices
             _maxConcurrentExtractions = configuration.GetValue("Performance:MaxConcurrentKeyframeExtractions", Math.Max(1, Environment.ProcessorCount - 1));
             _keyframeCount = configuration.GetValue("KeyframeExtraction:FrameCount", 10);
             _keyframeQuality = configuration.GetValue("KeyframeExtraction:Quality", 2); // 1-31, где 1 - лучшее качество
-            _logger.LogInformation("KeyframeExtractionBackgroundService инициализирован с {MaxConcurrentExtractions} параллельными извлечениями, {FrameCount} кадров, качество {Quality}.", 
-                _maxConcurrentExtractions, _keyframeCount, _keyframeQuality);
+            // Логирование инициализации убрано для уменьшения количества логов
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("KeyframeExtractionBackgroundService запущен.");
             
             // Инициализация FFmpeg (установка пути)
             var ffmpegPath = _serviceProvider.GetRequiredService<IConfiguration>().GetValue<string>("AppSettings:FFmpegPath");
@@ -65,8 +63,6 @@ namespace FileConverter.Services.BackgroundServices
             }
 
             await Task.WhenAll(tasks);
-
-            _logger.LogInformation("KeyframeExtractionBackgroundService остановлен.");
         }
 
         private async Task WorkerLoop(CancellationToken stoppingToken)
@@ -142,7 +138,6 @@ namespace FileConverter.Services.BackgroundServices
                             
                             // Создаем временную папку для кадров
                             var keyframesDir = tempFileManager.CreateTempDirectory();
-                            logger.LogInformation("Задача {JobId}: создана временная папка для кадров {KeyframesDir}", jobId, keyframesDir);
 
                             // Извлекаем ключевые кадры
                             keyframeInfos = await ExtractKeyframes(videoPath, keyframesDir, duration, jobId, conversionLogger, logger, stoppingToken);
@@ -153,7 +148,6 @@ namespace FileConverter.Services.BackgroundServices
                             bool uploadQueueSuccess = _channels.UploadChannel.Writer.TryWrite((jobId, mp3Path, videoPath, videoHash, keyframeInfos));
                             if (uploadQueueSuccess)
                             {
-                                logger.LogInformation("Задача {JobId}: передана в очередь загрузки с {FrameCount} ключевыми кадрами", jobId, keyframeInfos.Count);
                                 await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на загрузку с {keyframeInfos.Count} ключевыми кадрами");
                             }
                             else
@@ -226,7 +220,7 @@ namespace FileConverter.Services.BackgroundServices
                     .AddParameter($"-q:v {_keyframeQuality}")
                     .SetOutput(outputPath);
 
-                await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: извлечение кадра {i}/{_keyframeCount} в позиции {timePosition:hh\\:mm\\:ss}");
+                // Логирование извлечения кадра убрано для уменьшения количества логов
                 
                 // Retry логика для извлечения кадра
                 bool frameExtracted = false;

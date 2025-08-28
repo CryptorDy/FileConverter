@@ -34,12 +34,11 @@ namespace FileConverter.Services
             _serviceProvider = serviceProvider;
             _channels = channels;
             _maxConcurrentDownloads = configuration.GetValue<int>("Performance:MaxConcurrentYoutubeDownloads", 3);
-            _logger.LogInformation("YoutubeBackgroundService инициализирован с {MaxConcurrentDownloads} параллельными загрузками.", _maxConcurrentDownloads);
+            // Логирование инициализации убрано для уменьшения количества логов
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("YoutubeBackgroundService запущен.");
 
             var tasks = new Task[_maxConcurrentDownloads];
             for (int i = 0; i < _maxConcurrentDownloads; i++)
@@ -48,8 +47,6 @@ namespace FileConverter.Services
             }
 
             await Task.WhenAll(tasks);
-
-            _logger.LogInformation("YoutubeBackgroundService остановлен.");
         }
 
         private async Task WorkerLoop(CancellationToken stoppingToken)

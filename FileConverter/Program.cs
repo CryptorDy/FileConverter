@@ -19,11 +19,10 @@ var encoding = Encoding.GetEncoding(1251);
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Настройка Serilog
-Log.Logger = new LoggerConfiguration()
-    .ReadFrom.Configuration(builder.Configuration)
-    .Enrich.WithProperty("Environment", Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"))
-    .Enrich.WithProperty("ApplicationName", "FileConverter")
+// Настройка Serilog через appsettings.json
+builder.Host.UseSerilog((context, services, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .ReadFrom.Services(services)
     .Enrich.FromLogContext()
     .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(
@@ -39,10 +38,7 @@ Log.Logger = new LoggerConfiguration()
         outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff}] {Level:u3} {Message:lj}{NewLine}{Exception}",
         rollingInterval: Serilog.RollingInterval.Day,
         retainedFileCountLimit: 30,
-        encoding: encoding)
-    .CreateLogger();
-
-builder.Host.UseSerilog();
+        encoding: encoding));
 
 // Регистрируем обработчик HTTP запросов с прокси
 builder.Services.AddTransient<ProxyHttpClientHandler>();

@@ -49,8 +49,7 @@ namespace FileConverter.Services
             // Загружаем настройки
             _staleJobThresholdMinutes = _configuration.GetValue<int>("Performance:StaleJobThresholdMinutes", 30);
             _maxAttempts = _configuration.GetValue<int>("Performance:JobRetryLimit", 3);
-            _logger.LogInformation("JobRecoveryService инициализирован (v2 - Channels). Порог зависания: {StaleMinutes} мин, Лимит попыток: {MaxAttempts}", 
-                _staleJobThresholdMinutes, _maxAttempts);
+            // Логирование инициализации убрано для уменьшения количества логов
         }
         
         /// <inheritdoc/>
@@ -59,7 +58,7 @@ namespace FileConverter.Services
             int recoveredCount = 0;
             try
             {
-                _logger.LogInformation("Запуск процесса восстановления зависших заданий...");
+                // Логирование запуска процесса убрано для уменьшения количества логов
                 
                 // Добавляем диагностику состояния задач
                 await LogTaskStatisticsAsync();
@@ -69,7 +68,7 @@ namespace FileConverter.Services
                 
                 if (!staleJobs.Any())
                 {
-                    _logger.LogInformation("Зависшие задания (дольше {Minutes} мин) не найдены.", _staleJobThresholdMinutes);
+                    // Логирование отсутствия зависших заданий убрано (это нормальная ситуация)
                     return 0;
                 }
                 

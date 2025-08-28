@@ -45,7 +45,7 @@ public class VideoConverter : IVideoConverter
         _channels = channels;
         _youtubeDownloadService = youtubeDownloadService;
 
-        _logger.LogInformation("VideoConverter сервис инициализирован.");
+        // Логирование инициализации убрано для уменьшения количества логов
     }
 
     /// <summary>
@@ -55,7 +55,7 @@ public class VideoConverter : IVideoConverter
     /// <param name="jobId">Идентификатор задачи конвертации</param>
     public async Task ProcessVideo(string jobId)
     {
-        _logger.LogInformation("ProcessVideo вызван для задачи {JobId}", jobId);
+        // Логирование вызова ProcessVideo убрано для уменьшения количества логов
         try
         {
             // Находим задачу в базе данных
@@ -97,7 +97,6 @@ public class VideoConverter : IVideoConverter
                     if (writeSuccessful)
                     {
                         await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь YouTube скачивания");
-                        _logger.LogInformation("Задача {JobId} успешно добавлена в YoutubeDownloadChannel.", jobId);
                     }
                     else
                     {
@@ -113,7 +112,6 @@ public class VideoConverter : IVideoConverter
                     if (writeSuccessful)
                     {
                         await _conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на скачивание");
-                        _logger.LogInformation("Задача {JobId} успешно добавлена в _downloadChannel.", jobId);
                     }
                     else
                     {

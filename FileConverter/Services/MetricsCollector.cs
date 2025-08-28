@@ -245,15 +245,7 @@ namespace FileConverter.Services
                         .ToList()
                 };
                 
-                // Логируем сводку
-                _logger.LogInformation(
-                    "Performance metrics: Requests {TotalRequests} (Success: {SuccessRate:F1}%), " +
-                    "Conversions {TotalConversions} (Success: {ConversionSuccessRate:F1}%, Cached: {CachedResults})",
-                    summary.Requests.Total,
-                    summary.Requests.SuccessRate,
-                    summary.Conversions.Total,
-                    summary.Conversions.SuccessRate,
-                    summary.Conversions.Cached);
+                // Логирование метрик производительности убрано для уменьшения количества логов
                 
                 // Кэшируем сводку для последующего использования в API
                 await _cache.SetAsync("metrics:latest", summary, TimeSpan.FromMinutes(10));

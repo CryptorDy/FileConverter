@@ -35,7 +35,7 @@ namespace FileConverter.BackgroundServices
 
         public Task StartAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Служба восстановления и очистки логов запускается.");
+            // Логирование запуска службы убрано для уменьшения количества логов
 
             // Запускаем таймер для восстановления зависших заданий
             var recoveryIntervalMinutes = _configuration.GetValue<double>("Performance:RecoveryCheckIntervalMinutes", 10);
@@ -48,8 +48,7 @@ namespace FileConverter.BackgroundServices
              // Запускаем чуть позже, чтобы не конфликтовать с первым запуском восстановления
             _cleanupTimer = new Timer(DoCleanupWork, null, TimeSpan.FromMinutes(1), cleanupInterval); 
 
-            _logger.LogInformation("Таймер восстановления заданий настроен на интервал: {RecoveryInterval}", recoveryInterval);
-            _logger.LogInformation("Таймер очистки логов настроен на интервал: {CleanupInterval}", cleanupInterval);
+            // Логирование настройки таймеров убрано для уменьшения количества логов
 
             return Task.CompletedTask;
         }
@@ -62,7 +61,7 @@ namespace FileConverter.BackgroundServices
                 return;
             }
             _recoveringJobs = true;
-            _logger.LogInformation("Запуск периодической проверки зависших заданий...");
+            // Логирование запуска проверки убрано для уменьшения количества логов
 
             try
             {
@@ -90,7 +89,7 @@ namespace FileConverter.BackgroundServices
                 return;
             }
             _cleaningLogs = true;
-            _logger.LogInformation("Запуск периодической очистки старых логов...");
+            // Логирование запуска очистки убрано для уменьшения количества логов
 
             try
             {
@@ -114,7 +113,7 @@ namespace FileConverter.BackgroundServices
 
         public Task StopAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Служба восстановления и очистки логов останавливается.");
+            // Логирование остановки службы убрано для уменьшения количества логов
 
             _recoveryTimer?.Change(Timeout.Infinite, 0);
             _cleanupTimer?.Change(Timeout.Infinite, 0);

@@ -42,7 +42,7 @@ namespace FileConverter.BackgroundServices
 
         public Task StartAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Служба очистки временных файлов запускается.");
+            // Логирование запуска службы убрано для уменьшения количества логов
 
             // Запускаем таймер для очистки
             var cleanupIntervalHours = _configuration.GetValue<int>(CleanupIntervalHoursKey, 24); // По умолчанию раз в сутки
@@ -51,7 +51,7 @@ namespace FileConverter.BackgroundServices
             // Запускаем через некоторое время после старта, чтобы не мешать инициализации
             _cleanupTimer = new Timer(DoCleanupWork, null, TimeSpan.FromMinutes(5), cleanupInterval); 
 
-            _logger.LogInformation("Таймер очистки временных файлов настроен на интервал: {CleanupInterval}", cleanupInterval);
+            // Логирование настройки таймера убрано для уменьшения количества логов
 
             return Task.CompletedTask;
         }
@@ -64,7 +64,7 @@ namespace FileConverter.BackgroundServices
                 return;
             }
             _cleaningFiles = true;
-            _logger.LogInformation("Запуск периодической очистки временных файлов...");
+            // Логирование запуска очистки убрано для уменьшения количества логов
 
             try
             {
@@ -84,13 +84,13 @@ namespace FileConverter.BackgroundServices
                     
                     // 1. Получаем начальную статистику
                     var stats = await tempFileManager.GetTempFileStatsAsync();
-                    _logger.LogInformation($"Статистика временных файлов перед очисткой: {stats.TotalFiles} файлов ({BytesToMegabytes(stats.TotalSizeBytes):F2} MB)");
+                    // Логирование статистики временных файлов убрано для уменьшения количества логов
 
                     // 2. Всегда выполняем стандартную очистку (старше defaultAgeHours)
-                    _logger.LogInformation($"Выполнение стандартной очистки (файлы старше {defaultAgeHours} часов)...");
+                    // Логирование выполнения стандартной очистки убрано для уменьшения количества логов
                     await tempFileManager.CleanupOldTempFilesAsync(TimeSpan.FromHours(defaultAgeHours));
                     stats = await tempFileManager.GetTempFileStatsAsync(); // Обновляем статистику
-                     _logger.LogInformation($"Статистика после стандартной очистки: {stats.TotalFiles} файлов ({BytesToMegabytes(stats.TotalSizeBytes):F2} MB)");
+                     // Логирование статистики после стандартной очистки убрано для уменьшения количества логов
 
 
                     // 3. Проверяем на высокое использование и выполняем агрессивную очистку при необходимости
@@ -99,7 +99,7 @@ namespace FileConverter.BackgroundServices
                         _logger.LogWarning($"Обнаружено высокое использование временной папки ({BytesToMegabytes(stats.TotalSizeBytes):F2} MB). Запуск агрессивной очистки (файлы старше {aggressiveAgeHours} часов)...");
                         await tempFileManager.CleanupOldTempFilesAsync(TimeSpan.FromHours(aggressiveAgeHours));
                         stats = await tempFileManager.GetTempFileStatsAsync(); // Обновляем статистику
-                        _logger.LogInformation($"Статистика после агрессивной очистки: {stats.TotalFiles} файлов ({BytesToMegabytes(stats.TotalSizeBytes):F2} MB)");
+                        // Логирование статистики после агрессивной очистки убрано для уменьшения количества логов
 
                         // 4. Проверяем на очень высокое использование и выполняем еще более агрессивную очистку
                          if (stats.TotalSizeBytes > maxSize * veryHighUsageThreshold)
@@ -111,7 +111,7 @@ namespace FileConverter.BackgroundServices
                          }
                     }
 
-                    _logger.LogInformation("Периодическая очистка временных файлов завершена.");
+                    // Логирование завершения очистки убрано для уменьшения количества логов
                 }
             }
             catch (Exception ex)
@@ -126,7 +126,7 @@ namespace FileConverter.BackgroundServices
 
         public Task StopAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Служба очистки временных файлов останавливается.");
+            // Логирование остановки службы убрано для уменьшения количества логов
             _cleanupTimer?.Change(Timeout.Infinite, 0);
             return Task.CompletedTask;
         }

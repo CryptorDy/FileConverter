@@ -29,12 +29,11 @@ namespace FileConverter.Services.BackgroundServices
             _metricsCollector = metricsCollector;
             // Получаем максимальное количество параллельных загрузок из конфигурации
             _maxConcurrentDownloads = configuration.GetValue("Performance:MaxConcurrentDownloads", 5); 
-            _logger.LogInformation("DownloadBackgroundService инициализирован с {MaxConcurrentDownloads} параллельными загрузками.", _maxConcurrentDownloads);
+            // Логирование инициализации убрано для уменьшения количества логов
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("DownloadBackgroundService запущен.");
 
             // Создаем ограниченное количество параллельных задач для загрузки
             var tasks = new Task[_maxConcurrentDownloads];
@@ -44,8 +43,6 @@ namespace FileConverter.Services.BackgroundServices
             }
 
             await Task.WhenAll(tasks);
-
-            _logger.LogInformation("DownloadBackgroundService остановлен.");
         }
 
         private async Task WorkerLoop(CancellationToken stoppingToken)

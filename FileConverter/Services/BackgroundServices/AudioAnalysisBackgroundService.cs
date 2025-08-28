@@ -40,12 +40,10 @@ namespace FileConverter.Services
             _metricsCollector = metricsCollector;
             // Количество параллельных анализов, по умолчанию равно количеству ядер CPU (минимум 1)
             _maxConcurrentAnalyses = configuration.GetValue<int>("Performance:MaxConcurrentAudioAnalyses", Math.Max(1, Environment.ProcessorCount));
-            _logger.LogInformation("AudioAnalysisBackgroundService инициализирован с {MaxConcurrentAnalyses} параллельными анализами.", _maxConcurrentAnalyses);
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("AudioAnalysisBackgroundService запущен.");
 
             var tasks = new Task[_maxConcurrentAnalyses];
             for (int i = 0; i < _maxConcurrentAnalyses; i++)
@@ -83,7 +81,6 @@ namespace FileConverter.Services
                     var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
                     var conversionLogger = scope.ServiceProvider.GetRequiredService<IConversionLogger>();
                     var tempFileManager = scope.ServiceProvider.GetRequiredService<ITempFileManager>();
-                    var logger = scope.ServiceProvider.GetRequiredService<ILogger<AudioAnalysisBackgroundService>>();
 
                     // Пытаемся получить AudioAnalyzer, но если он недоступен - пропускаем анализ
                     AudioAnalyzer? audioAnalyzer = null;
@@ -93,7 +90,7 @@ namespace FileConverter.Services
                     }
                     catch (Exception ex)
                     {
-                        logger.LogWarning(ex, "AudioAnalyzer недоступен, пропускаем анализ аудио для задачи {JobId}", jobId);
+                        _logger.LogWarning(ex, "AudioAnalyzer недоступен, пропускаем анализ аудио для задачи {JobId}", jobId);
                         await conversionLogger.LogWarningAsync(jobId, "Анализ аудио пропущен - библиотека Essentia недоступна", ex.Message);
                     }
 
@@ -104,16 +101,16 @@ namespace FileConverter.Services
                         var job = await jobRepository.GetJobByIdAsync(jobId);
                         if (job == null)
                         {
-                            logger.LogWarning("Задача {JobId} не найдена в репозитории после извлечения из очереди анализа аудио.", jobId);
+                            _logger.LogWarning("Задача {JobId} не найдена в репозитории после извлечения из очереди анализа аудио.", jobId);
                             await conversionLogger.LogErrorAsync(jobId, $"Задача {jobId} не найдена в БД.");
                             // Удаляем временный MP3 файл
-                            CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            CleanupFile(tempFileManager, mp3Path, _logger, jobId);
                             continue;
                         }
 
                         if (!File.Exists(mp3Path))
                         {
-                            logger.LogWarning("MP3 файл не найден для задачи {JobId}: {Mp3Path}", jobId, mp3Path);
+                            _logger.LogWarning("MP3 файл не найден для задачи {JobId}: {Mp3Path}", jobId, mp3Path);
                             await conversionLogger.LogErrorAsync(jobId, $"MP3 файл не найден: {mp3Path}");
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "MP3 файл не найден для анализа аудио");
                             continue;
@@ -131,7 +128,7 @@ namespace FileConverter.Services
                             // Запускаем таймер для метрик анализа аудио
                             _metricsCollector.StartTimer("audio_analysis", jobId);
 
-                            logger.LogInformation("Задача {JobId}: запуск анализа аудио с Essentia...", jobId);
+                            _logger.LogInformation("Задача {JobId}: запуск анализа аудио с Essentia...", jobId);
 
                             // Настройка Polly retry policy для анализа аудио
                             var retryPolicy = Policy
@@ -141,14 +138,14 @@ namespace FileConverter.Services
                                     sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(3 * retryAttempt), // 3, 6 секунд
                                     onRetry: (outcome, timespan, retryCount, context) =>
                                     {
-                                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/2 анализа аудио неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
+                                        _logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/2 анализа аудио неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
                                             jobId, retryCount, timespan.TotalSeconds, outcome?.Message ?? "Unknown");
                                     });
 
                             // Выполняем анализ аудио с retry
                             string analysisJsonResult = await retryPolicy.ExecuteAsync(async () =>
                             {
-                                logger.LogInformation("Задача {JobId}: начинаем попытку анализа аудио", jobId);
+                                _logger.LogInformation("Задача {JobId}: начинаем попытку анализа аудио", jobId);
                                 
                                 // Выполняем анализ аудио с защитой от сбоев native кода
                                 string result;
@@ -183,16 +180,13 @@ namespace FileConverter.Services
                                     throw new InvalidOperationException("Анализ аудио вернул пустой результат");
                                 }
                                 
-                                logger.LogInformation("Задача {JobId}: успешный анализ аудио", jobId);
+                                _logger.LogInformation("Задача {JobId}: успешный анализ аудио", jobId);
                                 return result;
                             });
 
                             // Останавливаем таймер для метрик (успешный анализ аудио)
                             _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
                         
-                        // Добавляем подробное логгирование сырого JSON-ответа
-                        logger.LogInformation("Задача {JobId}: Получен сырой JSON от Essentia: {RawJson}", jobId, analysisJsonResult);
-
                         // Безопасная десериализация с использованием System.Text.Json
                         var analysisResponse = System.Text.Json.JsonSerializer.Deserialize<EssentiaAnalysisResponse>(analysisJsonResult);
                         
@@ -214,7 +208,7 @@ namespace FileConverter.Services
 
                         var audioAnalysis = analysisResponse.AudioAnalysis;
 
-                        logger.LogInformation("Задача {JobId}: анализ аудио завершен. BPM: {Bpm}, Confidence: {Confidence}, Beats: {Beats}", 
+                        _logger.LogInformation("Задача {JobId}: анализ аудио завершен. BPM: {Bpm}, Confidence: {Confidence}, Beats: {Beats}", 
                             (object)jobId, (object)audioAnalysis.tempo_bpm, (object)audioAnalysis.confidence, (object)audioAnalysis.beats_detected);
 
                             // Сохраняем результат анализа в базу данных
@@ -225,14 +219,11 @@ namespace FileConverter.Services
                             
                             await conversionLogger.LogSystemInfoAsync($"Анализ аудио завершен для задания {jobId}. Время: {analysisTimeMs}мс. BPM: {audioAnalysis.tempo_bpm}");
                             
-                            logger.LogInformation("Задача {JobId}: анализ аудио успешно завершен и сохранен в БД.", jobId);
-
-                            // Останавливаем таймер для метрик (успешный анализ аудио)
-                            _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: true);
+                            _logger.LogInformation("Задача {JobId}: анализ аудио успешно завершен и сохранен в БД.", jobId);
                         }
                         else
                         {
-                            logger.LogInformation("Задача {JobId}: анализ аудио пропущен (Essentia недоступна)", jobId);
+                            _logger.LogInformation("Задача {JobId}: анализ аудио пропущен (Essentia недоступна)", jobId);
                             await conversionLogger.LogSystemInfoAsync($"Задача {jobId}: Анализ аудио пропущен - библиотека Essentia недоступна");
                         }
 
@@ -243,37 +234,36 @@ namespace FileConverter.Services
                             bool keyframeQueueSuccess = _channels.KeyframeExtractionChannel.Writer.TryWrite((jobId, videoPath, mp3Path, videoHash));
                             if (keyframeQueueSuccess)
                             {
-                                logger.LogInformation("Задача {JobId}: передана в очередь извлечения ключевых кадров после анализа аудио (MP3: {Mp3Path}, Видео: {VideoPath})", jobId, mp3Path, videoPath);
                                 await conversionLogger.LogSystemInfoAsync($"Задание {jobId} передано в очередь извлечения ключевых кадров после анализа аудио");
                             }
                             else
                             {
-                                logger.LogWarning("Задача {JobId}: очередь извлечения ключевых кадров переполнена, файлы будут очищены", jobId);
+                                _logger.LogWarning("Задача {JobId}: очередь извлечения ключевых кадров переполнена, файлы будут очищены", jobId);
                                 await conversionLogger.LogErrorAsync(jobId, "Очередь извлечения ключевых кадров переполнена", null, ConversionStatus.Failed);
                                 await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Очередь извлечения ключевых кадров переполнена");
                                 // Очищаем временные файлы, так как они не будут обработаны дальше
-                                CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                                CleanupFile(tempFileManager, mp3Path, _logger, jobId);
                             }
                         }
                         else
                         {
-                            logger.LogWarning("Задача {JobId}: видео файл не найден для передачи в очередь ключевых кадров. VideoPath: {VideoPath}", jobId, videoPath);
+                            _logger.LogWarning("Задача {JobId}: видео файл не найден для передачи в очередь ключевых кадров. VideoPath: {VideoPath}", jobId, videoPath);
                             await conversionLogger.LogWarningAsync(jobId, $"Видео файл не найден для извлечения ключевых кадров: {videoPath}", "");
                             // Очищаем MP3 файл, так как видео недоступно
-                            CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                            CleanupFile(tempFileManager, mp3Path, _logger, jobId);
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Видео файл недоступен для извлечения ключевых кадров");
                         }
 
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                     {
-                        logger.LogInformation("Обработка задачи {JobId} (анализ аудио) отменена.", jobId);
+                        _logger.LogInformation("Обработка задачи {JobId} (анализ аудио) отменена.", jobId);
                         // Очищаем временный файл
-                        CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                        CleanupFile(tempFileManager, mp3Path, _logger, jobId);
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex, "Задача {JobId}: Ошибка на этапе анализа аудио.", jobId);
+                        _logger.LogError(ex, "Задача {JobId}: Ошибка на этапе анализа аудио.", jobId);
                         
                         // Останавливаем таймер для метрик (неуспешный анализ аудио)
                         _metricsCollector.StopTimer("audio_analysis", jobId, isSuccess: false);
@@ -281,11 +271,11 @@ namespace FileConverter.Services
                         await conversionLogger.LogErrorAsync(jobId, $"Ошибка при анализе аудио: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
                         await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка анализа аудио: {ex.Message}");
                         // Стандартизированная очистка временных файлов
-                        CleanupFile(tempFileManager, mp3Path, logger, jobId);
+                        CleanupFile(tempFileManager, mp3Path, _logger, jobId);
                         // Также очищаем видео файл, если он есть (унификация с другими сервисами)
                         if (!string.IsNullOrEmpty(videoPath))
                         {
-                            CleanupFile(tempFileManager, videoPath, logger, jobId);
+                            CleanupFile(tempFileManager, videoPath, _logger, jobId);
                         }
                     }
                 } // Конец using scope
