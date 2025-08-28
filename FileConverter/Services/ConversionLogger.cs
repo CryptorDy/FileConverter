@@ -55,7 +55,7 @@ namespace FileConverter.Services
                 VideoUrl = videoUrl
             });
             
-            _logger.LogInformation("Задача {JobId} создана для {VideoUrl}", jobId, videoUrl);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -71,7 +71,7 @@ namespace FileConverter.Services
                 Details = details
             });
             
-            _logger.LogInformation("Задача {JobId} поставлена в очередь", jobId);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -90,8 +90,7 @@ namespace FileConverter.Services
                 AttemptNumber = attemptNumber
             });
             
-            _logger.LogInformation("Задача {JobId} перешла в статус {Status} (попытка #{AttemptNumber})", 
-                jobId, status, attemptNumber);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -107,8 +106,7 @@ namespace FileConverter.Services
                 QueueTimeMs = queueTimeMs
             });
             
-            _logger.LogInformation("Задача {JobId}: Начата загрузка видео (время в очереди: {QueueTime}мс)", 
-                jobId, queueTimeMs);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -143,18 +141,7 @@ namespace FileConverter.Services
                 FileSizeBytes = fileSizeBytes
             });
             
-            // Рассчитываем время стадии, если есть
-            if (_stageTimers.TryGetValue(jobId, out var stageInfo) && stageInfo.Status == ConversionStatus.Downloading)
-            {
-                var duration = DateTime.UtcNow - stageInfo.Start;
-                _logger.LogInformation("Задача {JobId}: Загрузка видео завершена за {Duration:c}, размер: {Size}", 
-                    jobId, duration, FormatBytes(fileSizeBytes));
-            }
-            else
-            {
-                _logger.LogInformation("Задача {JobId}: Загрузка видео завершена, размер: {Size}", 
-                    jobId, FormatBytes(fileSizeBytes));
-            }
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -170,8 +157,7 @@ namespace FileConverter.Services
                 QueueTimeMs = queueTimeMs
             });
             
-            _logger.LogInformation("Задача {JobId}: Начата конвертация (время в очереди: {QueueTime}мс)", 
-                jobId, queueTimeMs);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -209,18 +195,7 @@ namespace FileConverter.Services
                 DurationSeconds = durationSeconds
             });
             
-            // Рассчитываем время стадии, если есть
-            if (_stageTimers.TryGetValue(jobId, out var stageInfo) && stageInfo.Status == ConversionStatus.Converting)
-            {
-                var duration = DateTime.UtcNow - stageInfo.Start;
-                _logger.LogInformation("Задача {JobId}: Конвертация завершена за {Duration:c}, размер MP3: {Size}, длительность: {AudioLength:c}", 
-                    jobId, duration, FormatBytes(fileSizeBytes), TimeSpan.FromSeconds(durationSeconds));
-            }
-            else
-            {
-                _logger.LogInformation("Задача {JobId}: Конвертация завершена, размер MP3: {Size}, длительность: {AudioLength:c}", 
-                    jobId, FormatBytes(fileSizeBytes), TimeSpan.FromSeconds(durationSeconds));
-            }
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -236,8 +211,7 @@ namespace FileConverter.Services
                 QueueTimeMs = queueTimeMs
             });
             
-            _logger.LogInformation("Задача {JobId}: Начата загрузка MP3 в хранилище (время в очереди: {QueueTime}мс)", 
-                jobId, queueTimeMs);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -269,17 +243,7 @@ namespace FileConverter.Services
                 Mp3Url = mp3Url
             });
             
-            // Рассчитываем время стадии, если есть
-            if (_stageTimers.TryGetValue(jobId, out var stageInfo) && stageInfo.Status == ConversionStatus.Uploading)
-            {
-                var duration = DateTime.UtcNow - stageInfo.Start;
-                _logger.LogInformation("Задача {JobId}: Загрузка MP3 в хранилище завершена за {Duration:c}", 
-                    jobId, duration);
-            }
-            else
-            {
-                _logger.LogInformation("Задача {JobId}: Загрузка MP3 в хранилище завершена", jobId);
-            }
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -301,8 +265,7 @@ namespace FileConverter.Services
                 Mp3Url = mp3Url
             });
             
-            _logger.LogInformation("Задача {JobId}: Выполнена успешно за {TotalTime:c}, MP3: {Mp3Url}", 
-                jobId, TimeSpan.FromMilliseconds(totalTimeMs), mp3Url);
+            // Логирование в консоль убрано - оставлено только в БД
             
             // Записываем метрику успешной конвертации
             _metricsCollector.RecordMetric("conversion_complete", totalTimeMs, isSuccess: true, jobId);
@@ -324,7 +287,7 @@ namespace FileConverter.Services
                 ErrorStackTrace = stackTrace
             });
             
-            _logger.LogError("Задача {JobId}: Ошибка: {ErrorMessage}", jobId, errorMessage);
+            // Логирование в консоль убрано - оставлено только в БД
             
             // Записываем метрику неуспешной операции при финальной ошибке
             if (status == ConversionStatus.Failed)
@@ -354,7 +317,7 @@ namespace FileConverter.Services
                 Details = details
             });
             
-            _logger.LogWarning("Задача {JobId}: Предупреждение: {Message}", jobId, message);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -370,8 +333,7 @@ namespace FileConverter.Services
                 Mp3Url = mp3Url
             });
             
-            _logger.LogInformation("Задача {JobId}: Найден готовый результат конвертации, MP3: {Mp3Url}", 
-                jobId, mp3Url);
+            // Логирование в консоль убрано - оставлено только в БД
             
             // Записываем метрику кэш-попадания
             _metricsCollector.RecordMetric("cache_hit", 0, isSuccess: true, jobId);
@@ -393,8 +355,7 @@ namespace FileConverter.Services
                 Details = $"Причина: {reason}"
             });
             
-            _logger.LogWarning("Задача {JobId}: Восстановлена из {PreviousStatus} в {NewStatus}. Причина: {Reason}", 
-                jobId, previousStatus, newStatus, reason);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -409,7 +370,7 @@ namespace FileConverter.Services
                 Details = $"Причина: {reason}"
             });
             
-            _logger.LogWarning("Задача {JobId}: Отменена. Причина: {Reason}", jobId, reason);
+            // Логирование в консоль убрано - оставлено только в БД
             
             // Очищаем таймеры
             _jobTimers.TryRemove(jobId, out _);
@@ -429,8 +390,7 @@ namespace FileConverter.Services
                 WaitReason = reason
             });
             
-            _logger.LogInformation("Задача {JobId}: Отложена на {Delay:c}. Причина: {Reason}", 
-                jobId, TimeSpan.FromMilliseconds(delayMs), reason);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -446,8 +406,7 @@ namespace FileConverter.Services
                 AttemptNumber = attemptNumber
             });
             
-            _logger.LogWarning("Задача {JobId}: Повторная попытка #{AttemptNumber}. Причина: {Reason}", 
-                jobId, attemptNumber, reason);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <inheritdoc/>
@@ -462,7 +421,7 @@ namespace FileConverter.Services
                 Details = details
             });
             
-            _logger.LogInformation("СИСТЕМА: {Message}", message);
+            // Логирование в консоль убрано - оставлено только в БД
         }
         
         /// <summary>

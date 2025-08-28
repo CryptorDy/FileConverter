@@ -61,14 +61,7 @@ namespace FileConverter.Middleware
                         durationMs,
                         context.Response.StatusCode);
                 }
-                else if (context.Response.StatusCode >= 400)  // Ошибочные ответы
-                {
-                    _logger.LogWarning(
-                        "Request with error: {Method} {Path} - Code: {StatusCode}",
-                        context.Request.Method,
-                        context.Request.Path,
-                        context.Response.StatusCode);
-                }
+                // Логирование ошибок 4xx и 5xx убрано для уменьшения количества логов
                 
                 // Добавляем заголовки для отладки, если включен режим разработки
                 if (Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development")

@@ -106,6 +106,7 @@ namespace FileConverter.Services.BackgroundServices
                             // Скачиваем видео
                             byte[] fileData;
                             string sourceDescription;
+                            var startTime = DateTime.UtcNow; // Время начала для всех типов загрузки
 
                                                     // Пытаемся скачать из S3 одним запросом
                         fileData = await storageService.TryDownloadFileAsync(videoUrl);
@@ -117,7 +118,11 @@ namespace FileConverter.Services.BackgroundServices
                             await File.WriteAllBytesAsync(videoPath, fileData, stoppingToken);
                             
                             await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} найдено в S3: {videoUrl}");
-                            await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length);
+                            
+                            // Для S3 файлов вычисляем реальную скорость (файл уже в памяти, загрузка мгновенная)
+                            var s3ElapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+                            var s3SpeedBytesPerSecond = s3ElapsedSeconds > 0 ? fileData.Length / s3ElapsedSeconds : fileData.Length;
+                            await conversionLogger.LogDownloadProgressAsync(jobId, fileData.Length, fileData.Length, s3SpeedBytesPerSecond);
                             
                             logger.LogInformation("Задача {JobId}: видео найдено в S3, сохранено во временный файл {VideoPath}", jobId, videoPath);
                         }
@@ -189,15 +194,20 @@ namespace FileConverter.Services.BackgroundServices
                                             await fileStream.WriteAsync(buffer, 0, bytesRead, combinedCts.Token);
                                             totalBytesDownloaded += bytesRead;
                                             
-                                            // Логируем прогресс каждые 5 секунд
-                                            if ((DateTime.UtcNow - lastLogTime).TotalSeconds >= 5)
+                                            // Логируем прогресс каждые 15 секунд (вместо 5) и передаем скорость в БД
+                                            if ((DateTime.UtcNow - lastLogTime).TotalSeconds >= 15)
                                             {
                                                 var downloadedMB = totalBytesDownloaded / (1024.0 * 1024.0);
                                                 var elapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
                                                 var speedMBps = downloadedMB / elapsedSeconds;
+                                                var speedBytesPerSecond = speedMBps * 1024 * 1024; // Конвертируем в байты/сек
                                                 
+                                                // Логируем в консоль
                                                 logger.LogInformation("Задача {JobId}: загружено {DownloadedMB:F2} МБ, скорость {Speed:F2} МБ/с", 
                                                     jobId, downloadedMB, speedMBps);
+                                                
+                                                // Передаем прогресс и скорость в БД через ConversionLogger
+                                                await conversionLogger.LogDownloadProgressAsync(jobId, totalBytesDownloaded, null, speedBytesPerSecond);
                                                     
                                                 lastLogTime = DateTime.UtcNow;
                                             }
@@ -222,7 +232,12 @@ namespace FileConverter.Services.BackgroundServices
                                 var fileSizeBytes = fileInfo.Length;
                                 
                                 await conversionLogger.LogSystemInfoAsync($"Видео для {jobId} скачано по {sourceDescription}: {videoUrl}");
-                                await conversionLogger.LogDownloadProgressAsync(jobId, fileSizeBytes, fileSizeBytes);
+                                
+                                // Логируем финальный прогресс с итоговой скоростью
+                                var finalElapsedSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
+                                var finalSpeedMBps = (fileSizeBytes / (1024.0 * 1024.0)) / finalElapsedSeconds;
+                                var finalSpeedBytesPerSecond = finalSpeedMBps * 1024 * 1024;
+                                await conversionLogger.LogDownloadProgressAsync(jobId, fileSizeBytes, fileSizeBytes, finalSpeedBytesPerSecond);
                                 
                                 // Читаем файл для вычисления хеша
                                 fileData = await File.ReadAllBytesAsync(videoPath, stoppingToken);

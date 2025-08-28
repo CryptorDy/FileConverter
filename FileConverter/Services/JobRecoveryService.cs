@@ -186,13 +186,23 @@ namespace FileConverter.Services
             }
         }
         
+        // Время последнего логирования статистики
+        private DateTime _lastStatisticsLogTime = DateTime.MinValue;
+        
         /// <summary>
-        /// Логирует статистику по задачам для диагностики
+        /// Логирует статистику по задачам для диагностики (не чаще чем раз в 10 минут)
         /// </summary>
         private async Task LogTaskStatisticsAsync()
         {
             try
             {
+                // Логируем статистику не чаще чем раз в 10 минут
+                var timeSinceLastLog = DateTime.UtcNow - _lastStatisticsLogTime;
+                if (timeSinceLastLog.TotalMinutes < 10)
+                {
+                    return; // Пропускаем логирование, если прошло меньше 10 минут
+                }
+                
                 var downloadingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Downloading });
                 var convertingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Converting });
                 var uploadingCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Uploading });
@@ -200,13 +210,14 @@ namespace FileConverter.Services
                 var completedCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Completed });
                 var failedCount = await _jobRepository.GetJobsByStatusesCountAsync(new[] { ConversionStatus.Failed });
                 
-                _logger.LogInformation("Статистика задач: Pending={Pending}, Downloading={Downloading}, Converting={Converting}, " +
-                                      "Uploading={Uploading}, Completed={Completed}, Failed={Failed}", 
-                    pendingCount, downloadingCount, convertingCount, uploadingCount, completedCount, failedCount);
+                // Логирование в консоль убрано для уменьшения количества логов
                 
                 await _conversionLogger.LogSystemInfoAsync(
                     $"Статистика задач: Pending={pendingCount}, Downloading={downloadingCount}, Converting={convertingCount}, " +
                     $"Uploading={uploadingCount}, Completed={completedCount}, Failed={failedCount}");
+                
+                // Обновляем время последнего логирования
+                _lastStatisticsLogTime = DateTime.UtcNow;
             }
             catch (Exception ex)
             {
