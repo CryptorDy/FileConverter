@@ -29,13 +29,20 @@ namespace FileConverter.Services
             _serviceUrl = configuration["AWS:S3:ServiceURL"] ?? throw new ArgumentNullException("AWS:S3:ServiceURL is not configured");
             var accessKey = configuration["AWS:S3:AccessKey"] ?? throw new ArgumentNullException("AWS:S3:AccessKey is not configured");
             var secretKey = configuration["AWS:S3:SecretKey"] ?? throw new ArgumentNullException("AWS:S3:SecretKey is not configured");
+            var region = configuration["AWS:Region"]; // Необязательный параметр для S3-совместимых хранилищ
             
             // Создаем клиент S3 с настройками из конфигурации
             var credentials = new BasicAWSCredentials(accessKey, secretKey);
             var config = new AmazonS3Config
             {
-                ServiceURL = _serviceUrl
+                ServiceURL = _serviceUrl,
+                ForcePathStyle = true
             };
+            if (!string.IsNullOrWhiteSpace(region))
+            {
+                // Для S3-совместимых сервисов требуется явный регион для аутентификации
+                config.AuthenticationRegion = region;
+            }
             
             _s3Client = new AmazonS3Client(credentials, config);
         }
@@ -67,11 +74,24 @@ namespace FileConverter.Services
                     Key = key,
                     FilePath = filePath,
                     ContentType = contentType,
-                    CannedACL = S3CannedACL.PublicRead
+                    CannedACL = S3CannedACL.PublicRead,
+                    UseChunkEncoding = false
                 };
 
                 await _s3Client.PutObjectAsync(request);
                 return $"{_serviceUrl}/{_bucketName}/{key}";
+            }
+            catch (AmazonS3Exception s3Ex)
+            {
+                _logger.LogError(s3Ex, "S3 error uploading file: {FilePath}. StatusCode={StatusCode}, ErrorCode={ErrorCode}, RequestId={RequestId}",
+                    filePath, s3Ex.StatusCode, s3Ex.ErrorCode, s3Ex.RequestId);
+                throw;
+            }
+            catch (AmazonServiceException awsEx)
+            {
+                _logger.LogError(awsEx, "AWS service error uploading file: {FilePath}. StatusCode={StatusCode}",
+                    filePath, awsEx.StatusCode);
+                throw;
             }
             catch (Exception ex)
             {

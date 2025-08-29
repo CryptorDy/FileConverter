@@ -1,42 +1,37 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace FileConverter.Models;
 
-/// <summary>
-/// Модель для хранения информации о прокси-сервере
-/// </summary>
 public class ProxyServer
 {
-    /// <summary>
-    /// Адрес прокси-сервера
-    /// </summary>
+    public int Id { get; set; }
+    
+    [Required]
+    [MaxLength(255)]
     public string Host { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Порт прокси-сервера
-    /// </summary>
+    
     public int Port { get; set; }
-
-    /// <summary>
-    /// Имя пользователя для аутентификации (если требуется)
-    /// </summary>
+    
+    [MaxLength(255)]
     public string? Username { get; set; }
-
-    /// <summary>
-    /// Пароль для аутентификации (если требуется)
-    /// </summary>
+    
+    [MaxLength(255)]
     public string? Password { get; set; }
-
-    /// <summary>
-    /// Флаг доступности прокси (устанавливается динамически)
-    /// </summary>
+    
+    public bool IsActive { get; set; } = true;
+    
     public bool IsAvailable { get; set; } = true;
-
-    /// <summary>
-    /// Время последней проверки доступности
-    /// </summary>
-    public DateTime LastChecked { get; set; } = DateTime.MinValue;
-
-    /// <summary>
-    /// Количество последовательных ошибок с использованием этого прокси
-    /// </summary>
+    
+    public int ActiveClients { get; set; } = 0;
+    
+    public DateTime LastChecked { get; set; } = DateTime.UtcNow;
+    
     public int ErrorCount { get; set; } = 0;
+    
+    [MaxLength(1000)]
+    public string? LastError { get; set; }
+    
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 } 

@@ -83,12 +83,7 @@ namespace FileConverter.Helpers
                     return false;
                 }
                 
-                // Special handling for social media
-                if (IsSocialMediaUrl(uri))
-                {
-                    _logger.LogInformation($"Social media URL detected: {uri.Host}. Special headers may be required for access.");
-                    // We allow social media URLs but warn about possible issues
-                }
+                
                 
                 return true;
             }

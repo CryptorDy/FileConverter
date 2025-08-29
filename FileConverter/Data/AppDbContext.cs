@@ -13,6 +13,7 @@ namespace FileConverter.Data
         public DbSet<BatchJob> BatchJobs { get; set; }
         public DbSet<MediaStorageItem> MediaItems { get; set; }
         public DbSet<ConversionLogEvent> ConversionLogs { get; set; }
+        public DbSet<ProxyServer> ProxyServers { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -78,6 +79,25 @@ namespace FileConverter.Data
                 entity.HasIndex(e => e.Timestamp);
                 entity.HasIndex(e => e.EventType);
                 entity.HasIndex(e => new { e.JobId, e.Timestamp });
+            });
+            
+            // Настраиваем ProxyServer
+            modelBuilder.Entity<ProxyServer>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Host).IsRequired().HasMaxLength(255);
+                entity.Property(e => e.Port).IsRequired();
+                entity.Property(e => e.Username).HasMaxLength(255);
+                entity.Property(e => e.Password).HasMaxLength(255);
+                entity.Property(e => e.LastError).HasMaxLength(1000);
+                entity.Property(e => e.CreatedAt).IsRequired();
+                entity.Property(e => e.UpdatedAt).IsRequired();
+                
+                // Индексы для быстрого поиска
+                entity.HasIndex(e => e.IsActive);
+                entity.HasIndex(e => e.IsAvailable);
+                entity.HasIndex(e => new { e.IsActive, e.IsAvailable });
+                entity.HasIndex(e => e.Host);
             });
         }
     }

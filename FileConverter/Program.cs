@@ -40,6 +40,16 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
         retainedFileCountLimit: 30,
         encoding: encoding));
 
+// Конфигурация пула прокси
+builder.Services.Configure<ProxyPoolOptions>(builder.Configuration.GetSection("ProxyPool"));
+
+// Конфигурация email уведомлений
+builder.Services.Configure<EmailNotificationOptions>(builder.Configuration.GetSection("EmailNotifications"));
+
+// Регистрируем сервисы
+builder.Services.AddSingleton<EmailNotificationService>();
+builder.Services.AddSingleton<ProxyPool>();
+
 // Регистрируем обработчик HTTP запросов с прокси
 builder.Services.AddTransient<ProxyHttpClientHandler>();
 
