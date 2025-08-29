@@ -114,6 +114,42 @@ dotnet FileConverter.dll
 - **Балансировка нагрузки** с помощью Hangfire
 - **Мониторинг производительности** с автоматическими метриками
 
+### Очереди и конвейер обработки
+
+Система использует каналы (очереди) для построения конвейера обработки. Все каналы теперь неограниченные (unbounded) — задания не отбрасываются из‑за переполнения. Нагрузка контролируется параметрами максимального параллелизма `Performance:MaxConcurrent*`.
+
+- DownloadChannel: входная очередь загрузок
+  - Сообщение: `(JobId, VideoUrl)`
+  - Источник: контроллер/Recovery сервис
+  - Потребитель: DownloadBackgroundService
+
+- ConversionChannel: очередь конвертации видео в аудио
+  - Сообщение: `(JobId, VideoPath, VideoHash)`
+  - Источник: DownloadBackgroundService
+  - Потребитель: ConversionBackgroundService
+
+- AudioAnalysisChannel: очередь анализа аудио (Essentia)
+  - Сообщение: `(JobId, Mp3Path, VideoPath, VideoHash)`
+  - Источник: ConversionBackgroundService
+  - Потребитель: AudioAnalysisBackgroundService
+
+- KeyframeExtractionChannel: очередь извлечения ключевых кадров
+  - Сообщение: `(JobId, VideoPath, Mp3Path, VideoHash)`
+  - Источник: AudioAnalysisBackgroundService
+  - Потребитель: KeyframeExtractionBackgroundService
+
+- UploadChannel: очередь загрузки результатов в хранилище
+  - Сообщение: `(JobId, Mp3Path, VideoPath, VideoHash, KeyframeInfos)`
+  - Источник: KeyframeExtractionBackgroundService
+  - Потребитель: UploadBackgroundService
+
+- YoutubeDownloadChannel: очередь загрузок с YouTube
+  - Сообщение: `(JobId, VideoUrl)`
+  - Источник: контроллер/Recovery сервис
+  - Потребитель: YoutubeBackgroundService
+
+Важно: метрики и параллелизм настраиваются через `Performance:MaxConcurrentDownloads`, `MaxConcurrentConversions`, `MaxConcurrentAudioAnalyses`, `MaxConcurrentKeyframeExtractions`, `MaxConcurrentUploads`, `MaxConcurrentYoutubeDownloads`. Ключи емкостей очередей удалены и не используются.
+
 ## Мониторинг и администрирование
 
 - **Панель Hangfire**: `/hangfire` (только в режиме разработки)
