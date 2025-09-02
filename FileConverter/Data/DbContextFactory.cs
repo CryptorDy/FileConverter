@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text;
 
 namespace FileConverter.Data
 {
@@ -86,6 +87,12 @@ namespace FileConverter.Data
             {
                 return await func(dbContext);
             }
+            catch (DbUpdateException dbEx)
+            {
+                var details = BuildDbUpdateExceptionDetails(dbEx);
+                _logger.LogError(dbEx, "DbUpdateException during async function with DbContext. Details: {Details}", details);
+                throw;
+            }
             catch (ObjectDisposedException ex)
             {
                 _logger.LogError(ex, "Контекст базы данных был уничтожен во время выполнения операции");
@@ -94,7 +101,16 @@ namespace FileConverter.Data
                 try
                 {
                     _logger.LogInformation("Повторная попытка выполнения операции с новым контекстом");
-                    return await func(newDbContext);
+                    try
+                    {
+                        return await func(newDbContext);
+                    }
+                    catch (DbUpdateException retryDbEx)
+                    {
+                        var details = BuildDbUpdateExceptionDetails(retryDbEx);
+                        _logger.LogError(retryDbEx, "DbUpdateException during retry with new DbContext. Details: {Details}", details);
+                        throw;
+                    }
                 }
                 catch (Exception retryEx)
                 {
@@ -107,6 +123,32 @@ namespace FileConverter.Data
                 _logger.LogError(ex, "Error executing async function with DbContext");
                 throw;
             }
+        }
+
+        private static string BuildDbUpdateExceptionDetails(DbUpdateException exception)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Exception: {exception.GetType().FullName}");
+            sb.AppendLine($"Message: {exception.Message}");
+            if (exception.InnerException != null)
+            {
+                sb.AppendLine($"Inner: {exception.InnerException.GetType().FullName}: {exception.InnerException.Message}");
+            }
+            try
+            {
+                foreach (var entry in exception.Entries)
+                {
+                    sb.AppendLine($"Entry: {entry.Entity.GetType().FullName}, State: {entry.State}");
+                    foreach (var prop in entry.Properties)
+                    {
+                        sb.AppendLine($" - {prop.Metadata.Name} = {prop.CurrentValue}");
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return sb.ToString();
         }
     }
 } 

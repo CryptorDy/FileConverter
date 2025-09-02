@@ -6,6 +6,8 @@ using Microsoft.Extensions.Configuration;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Text;
+using Microsoft.EntityFrameworkCore;
 
 using FileConverter.Services;
 
@@ -104,7 +106,8 @@ namespace FileConverter.Services
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Ошибка при восстановлении задачи {JobId}: {Message}", job.Id, ex.Message);
-                         await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка восстановления: {ex.Message}", ex.StackTrace, job.Status);
+                        var detailed = BuildExceptionDetails(ex);
+                        await _conversionLogger.LogErrorAsync(job.Id, $"Ошибка восстановления: {ex.Message}", detailed, job.Status);
                     }
                 }
                  
@@ -125,6 +128,58 @@ namespace FileConverter.Services
                 await _conversionLogger.LogSystemInfoAsync($"Критическая ошибка сервиса восстановления: {ex.Message}");
             }
             return recoveredCount;
+        }
+
+        /// <summary>
+        /// Формирует развернутые детали исключения, включая вложенные исключения и данные EF Core
+        /// </summary>
+        private static string BuildExceptionDetails(Exception exception)
+        {
+            var builder = new StringBuilder();
+
+            void AppendException(Exception ex, int level)
+            {
+                var indent = new string('>', level);
+                builder.AppendLine($"{indent} Exception: {ex.GetType().FullName}");
+                builder.AppendLine($"{indent} Message: {ex.Message}");
+                if (!string.IsNullOrWhiteSpace(ex.StackTrace))
+                {
+                    builder.AppendLine($"{indent} StackTrace:");
+                    builder.AppendLine(ex.StackTrace);
+                }
+
+                if (ex is DbUpdateException dbUpdateEx)
+                {
+                    builder.AppendLine($"{indent} DbUpdateException entries:");
+                    foreach (var entry in dbUpdateEx.Entries)
+                    {
+                        try
+                        {
+                            builder.AppendLine($"{indent}  Entity: {entry.Entity.GetType().FullName}, State: {entry.State}");
+                            foreach (var prop in entry.Properties)
+                            {
+                                builder.AppendLine($"{indent}   - {prop.Metadata.Name} = {prop.CurrentValue}");
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    if (dbUpdateEx.InnerException != null)
+                    {
+                        builder.AppendLine($"{indent} DbUpdateException.Inner: {dbUpdateEx.InnerException.GetType().FullName}: {dbUpdateEx.InnerException.Message}");
+                    }
+                }
+
+                if (ex.InnerException != null)
+                {
+                    AppendException(ex.InnerException, level + 1);
+                }
+            }
+
+            AppendException(exception, 0);
+            return builder.ToString();
         }
         
         /// <summary>

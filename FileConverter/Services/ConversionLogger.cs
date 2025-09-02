@@ -3,6 +3,8 @@ using FileConverter.Models;
 using FileConverter.Services.Interfaces;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Microsoft.EntityFrameworkCore;
+using System.Text;
 
 namespace FileConverter.Services
 {
@@ -453,14 +455,45 @@ namespace FileConverter.Services
                 
                 return await _logRepository.AddLogAsync(logEvent);
             }
+            catch (DbUpdateException dbEx)
+            {
+                var details = BuildDbUpdateExceptionDetails(dbEx);
+                _logger.LogError(dbEx, "Ошибка при сохранении события лога для задачи {JobId}: {Message}. Details: {Details}", 
+                    logEvent.JobId, dbEx.Message, details);
+                return logEvent;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Ошибка при сохранении события лога для задачи {JobId}: {Message}", 
                     logEvent.JobId, ex.Message);
-                    
-                // В случае ошибки при записи лога, возвращаем исходное событие
                 return logEvent;
             }
+        }
+
+        private static string BuildDbUpdateExceptionDetails(DbUpdateException exception)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Exception: {exception.GetType().FullName}");
+            sb.AppendLine($"Message: {exception.Message}");
+            if (exception.InnerException != null)
+            {
+                sb.AppendLine($"Inner: {exception.InnerException.GetType().FullName}: {exception.InnerException.Message}");
+            }
+            try
+            {
+                foreach (var entry in exception.Entries)
+                {
+                    sb.AppendLine($"Entry: {entry.Entity.GetType().FullName}, State: {entry.State}");
+                    foreach (var prop in entry.Properties)
+                    {
+                        sb.AppendLine($" - {prop.Metadata.Name} = {prop.CurrentValue}");
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return sb.ToString();
         }
         
         /// <summary>
