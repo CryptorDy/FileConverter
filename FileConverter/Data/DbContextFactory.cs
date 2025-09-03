@@ -98,19 +98,17 @@ namespace FileConverter.Data
                 _logger.LogError(ex, "Контекст базы данных был уничтожен во время выполнения операции");
                 // Пытаемся повторить операцию с новым контекстом
                 using var newDbContext = CreateDbContext();
+                
+                _logger.LogInformation("Повторная попытка выполнения операции с новым контекстом");
                 try
                 {
-                    _logger.LogInformation("Повторная попытка выполнения операции с новым контекстом");
-                    try
-                    {
-                        return await func(newDbContext);
-                    }
-                    catch (DbUpdateException retryDbEx)
-                    {
-                        var details = BuildDbUpdateExceptionDetails(retryDbEx);
-                        _logger.LogError(retryDbEx, "DbUpdateException during retry with new DbContext. Details: {Details}", details);
-                        throw;
-                    }
+                    return await func(newDbContext);
+                }
+                catch (DbUpdateException retryDbEx)
+                {
+                    var details = BuildDbUpdateExceptionDetails(retryDbEx);
+                    _logger.LogError(retryDbEx, "DbUpdateException during retry with new DbContext. Details: {Details}", details);
+                    throw;
                 }
                 catch (Exception retryEx)
                 {
