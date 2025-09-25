@@ -2,6 +2,8 @@ using FileConverter.Data;
 using FileConverter.Models;
 using FileConverter.Services.Interfaces;
 using Polly;
+using System.Net;
+using FileConverter.Services;
 
 namespace FileConverter.Services.BackgroundServices
 {
@@ -133,7 +135,9 @@ namespace FileConverter.Services.BackgroundServices
                             
                             // Настройка Polly retry policy
                             var retryPolicy = Policy
-                                .Handle<Exception>(ex => !(ex is OperationCanceledException && stoppingToken.IsCancellationRequested))
+                                .Handle<Exception>(ex =>
+                                    !(ex is OperationCanceledException && stoppingToken.IsCancellationRequested) &&
+                                    ex is not ReelsDownloadProhibitedException)
                                 .WaitAndRetryAsync(
                                     retryCount: 3,
                                     sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 2, 4, 8 секунд
@@ -163,6 +167,8 @@ namespace FileConverter.Services.BackgroundServices
                                     throw new InvalidOperationException($"Доступ запрещен (403 Forbidden). URL может требовать авторизации или не поддерживает прямое скачивание: {videoUrl}");
                                 if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                                     throw new InvalidOperationException($"Файл не найден (404 Not Found): {videoUrl}");
+                                if (response.StatusCode == HttpStatusCode.ServiceUnavailable)
+                                    throw new ReelsDownloadProhibitedException("Reels имеет запрет на скачивание");
                                 if (!response.IsSuccessStatusCode)
                                     throw new InvalidOperationException($"HTTP ошибка при скачивании: {(int)response.StatusCode} {response.ReasonPhrase}");
 
@@ -344,6 +350,21 @@ namespace FileConverter.Services.BackgroundServices
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Таймаут загрузки: {timeoutEx.Message}");
                             
                             // Удаляем частично загруженный файл
+                            if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
+                            {
+                                CleanupFile(tempFileManager, videoPath, logger, jobId);
+                            }
+                        }
+                        catch (ReelsDownloadProhibitedException reelsEx)
+                        {
+                            // Специальная обработка 503 для Reels: помечаем задачу как Failed с заданным текстом
+                            logger.LogWarning(reelsEx, "Задача {JobId}: Reels запрещен к скачиванию.", jobId);
+
+                            _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
+
+                            await conversionLogger.LogErrorAsync(jobId, reelsEx.Message, reelsEx.StackTrace, ConversionStatus.Failed);
+                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: reelsEx.Message);
+
                             if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
                             {
                                 CleanupFile(tempFileManager, videoPath, logger, jobId);
