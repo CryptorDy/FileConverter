@@ -143,10 +143,21 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
         // Ошибки прокси
         catch (HttpRequestException ex) when (IsProxyException(ex))
         {
-            string errorDetails = GetDetailedErrorMessage(ex);
+            string errorDetails;
             
-            _logger.LogWarning("Запрос #{RequestId}: Ошибка прокси {Proxy}. Ошибка: {Error}",
-                requestId, proxyInfo, errorDetails);
+            // Специальная обработка ошибки 502 - логируем без деталей стека
+            if (Is502Error(ex))
+            {
+                _logger.LogWarning("Запрос #{RequestId}: Ошибка 502 Bad Gateway от прокси {Proxy}", 
+                    requestId, proxyInfo);
+                errorDetails = "502 Bad Gateway";
+            }
+            else
+            {
+                errorDetails = GetDetailedErrorMessage(ex);
+                _logger.LogWarning("Запрос #{RequestId}: Ошибка прокси {Proxy}. Ошибка: {Error}",
+                    requestId, proxyInfo, errorDetails);
+            }
 
             // Помечаем прокси как проблемный
             if (_assignedProxy != null)
@@ -311,6 +322,33 @@ public class ProxyHttpClientHandler : HttpClientHandler, IDisposable
             
         // В противном случае считаем таймаутом, если есть соответствующие признаки
         return messageIndicatesTimeout || hasTimeoutInnerException;
+    }
+
+    /// <summary>
+    /// Проверяет, является ли исключение ошибкой 502 Bad Gateway от прокси
+    /// </summary>
+    private bool Is502Error(Exception ex)
+    {
+        if (ex == null) return false;
+        
+        // Проверяем сообщение об ошибке на наличие 502
+        string message = ex.Message.ToLowerInvariant();
+        if (message.Contains("502") || message.Contains("bad gateway"))
+        {
+            return true;
+        }
+        
+        // Проверяем внутреннее исключение
+        if (ex.InnerException != null)
+        {
+            string innerMessage = ex.InnerException.Message.ToLowerInvariant();
+            if (innerMessage.Contains("502") || innerMessage.Contains("bad gateway"))
+            {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     /// <summary>

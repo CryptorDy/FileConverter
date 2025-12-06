@@ -143,8 +143,17 @@ namespace FileConverter.Services.BackgroundServices
                                     sleepDurationProvider: retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), // 2, 4, 8 секунд
                                     onRetry: (outcome, timespan, retryCount, context) =>
                                     {
+                                        // Специальная обработка ошибки 502 - логируем без стека
+                                        if (Is502Error(outcome))
+                                        {
+                                            logger.LogWarning("Задача {JobId}: Ошибка 502 Bad Gateway от прокси. Попытка {RetryCount}/3. Повтор через {Delay}с", 
+                                                jobId, retryCount, timespan.TotalSeconds);
+                                        }
+                                        else
+                                        {
                                         logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/3 загрузки неудачна. Повтор через {Delay}с. Ошибка: {Error}", 
                                             jobId, retryCount, timespan.TotalSeconds, outcome?.Message ?? "Unknown");
+                                        }
                                         
                                         // Очищаем частично загруженный файл перед повтором
                                         if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
@@ -372,16 +381,31 @@ namespace FileConverter.Services.BackgroundServices
                         }
                         catch (Exception ex)
                         {
-                            // Логируем ошибку и обновляем статус задачи на Failed
-                            logger.LogError(ex, "Задача {JobId}: Ошибка на этапе скачивания.", jobId);
+                            // Специальная обработка ошибки 502 - логируем без стека
+                            if (Is502Error(ex))
+                            {
+                                logger.LogWarning("Задача {JobId}: Ошибка 502 Bad Gateway от прокси. Все попытки загрузки неудачны. Задача помечена как Failed", jobId);
+                                
+                                // Останавливаем таймер для метрик (неуспешная загрузка)
+                                _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
+                                
+                                await conversionLogger.LogErrorAsync(jobId, "Ошибка 502 Bad Gateway от прокси при скачивании видео", null, ConversionStatus.Failed);
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: "Ошибка 502 Bad Gateway от прокси");
+                            }
+                            else
+                            {
+                                // Логируем ошибку и обновляем статус задачи на Failed
+                                logger.LogError(ex, "Задача {JobId}: Ошибка на этапе скачивания.", jobId);
+                                
+                                // Останавливаем таймер для метрик (неуспешная загрузка)
+                                _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
+                                
+                                await conversionLogger.LogErrorAsync(jobId, $"Ошибка при скачивании видео: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
+                                await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка скачивания: {ex.Message}");
+                            }
                             
-                            // Останавливаем таймер для метрик (неуспешная загрузка)
-                            _metricsCollector.StopTimer("download_video", jobId, isSuccess: false);
-                            
-                            await conversionLogger.LogErrorAsync(jobId, $"Ошибка при скачивании видео: {ex.Message}", ex.StackTrace, ConversionStatus.Failed);
-                            await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Failed, errorMessage: $"Ошибка скачивания: {ex.Message}");
                             // Удаляем временный файл, если он был создан
-                             if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
+                            if (!string.IsNullOrEmpty(videoPath) && File.Exists(videoPath))
                             {
                                 CleanupFile(tempFileManager, videoPath, logger, jobId);
                             }
@@ -407,6 +431,33 @@ namespace FileConverter.Services.BackgroundServices
         {
             if (string.IsNullOrEmpty(url)) return false;
             return url.Contains("instagram.com") || url.Contains("cdninstagram.com") || url.Contains("fbcdn.net");
+        }
+
+        /// <summary>
+        /// Проверяет, является ли исключение ошибкой 502 Bad Gateway от прокси
+        /// </summary>
+        private bool Is502Error(Exception? ex)
+        {
+            if (ex == null) return false;
+            
+            // Проверяем сообщение об ошибке на наличие 502
+            string message = ex.Message.ToLowerInvariant();
+            if (message.Contains("502") || message.Contains("bad gateway"))
+            {
+                return true;
+            }
+            
+            // Проверяем внутреннее исключение
+            if (ex.InnerException != null)
+            {
+                string innerMessage = ex.InnerException.Message.ToLowerInvariant();
+                if (innerMessage.Contains("502") || innerMessage.Contains("bad gateway"))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
         }
 
         private void CleanupFile(ITempFileManager tempFileManager, string path, ILogger logger, string jobId)
