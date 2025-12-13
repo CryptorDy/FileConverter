@@ -190,6 +190,9 @@ builder.Services.AddSingleton<UrlValidator>();
 // Метрики и мониторинг
 builder.Services.AddSingleton<MetricsCollector>();
 
+// Сервис ограничения загрузки CPU
+builder.Services.AddSingleton<CpuThrottleService>();
+
 // Ограничение скорости запросов API
 builder.Services.AddRateLimiter(options =>
 {
@@ -289,6 +292,7 @@ builder.Services.AddCors(options =>
 });
 
 // Регистрируем фоновые службы (Hosted Services)
+builder.Services.AddHostedService<CpuThrottleService>(sp => sp.GetRequiredService<CpuThrottleService>());
 builder.Services.AddHostedService<DownloadBackgroundService>();
 builder.Services.AddHostedService<ConversionBackgroundService>();
 builder.Services.AddHostedService<AudioAnalysisBackgroundService>();

@@ -22,6 +22,7 @@ namespace FileConverter.Services.BackgroundServices
         private readonly ILogger<KeyframeExtractionBackgroundService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentExtractions;
         private readonly int _keyframeCount;
         private readonly int _keyframeQuality;
@@ -30,11 +31,13 @@ namespace FileConverter.Services.BackgroundServices
             ILogger<KeyframeExtractionBackgroundService> logger,
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
+            _cpuThrottleService = cpuThrottleService;
             _maxConcurrentExtractions = configuration.GetValue("Performance:MaxConcurrentKeyframeExtractions", Math.Max(1, Environment.ProcessorCount - 1));
             _keyframeCount = configuration.GetValue("KeyframeExtraction:FrameCount", 10);
             _keyframeQuality = configuration.GetValue("KeyframeExtraction:Quality", 2); // 1-31, где 1 - лучшее качество
@@ -208,6 +211,9 @@ namespace FileConverter.Services.BackgroundServices
             
             for (int i = 1; i <= _keyframeCount; i++)
             {
+                // Проверяем загрузку CPU перед извлечением каждого кадра
+                await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                
                 var timePosition = TimeSpan.FromSeconds(interval * i);
                 // Используем уникальное имя файла с jobId для потокобезопасности
                 var outputPath = Path.Combine(outputDir, $"{jobId}_keyframe_{i:D3}.jpg");

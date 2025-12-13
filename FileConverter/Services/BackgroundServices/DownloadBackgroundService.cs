@@ -16,6 +16,7 @@ namespace FileConverter.Services.BackgroundServices
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
         private readonly MetricsCollector _metricsCollector;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentDownloads;
 
         public DownloadBackgroundService(
@@ -23,12 +24,14 @@ namespace FileConverter.Services.BackgroundServices
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
             MetricsCollector metricsCollector,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
             _metricsCollector = metricsCollector;
+            _cpuThrottleService = cpuThrottleService;
             // Получаем максимальное количество параллельных загрузок из конфигурации
             _maxConcurrentDownloads = configuration.GetValue("Performance:MaxConcurrentDownloads", 5); 
             // Логирование инициализации убрано для уменьшения количества логов
@@ -167,6 +170,9 @@ namespace FileConverter.Services.BackgroundServices
                             // Выполняем загрузку с retry
                             await retryPolicy.ExecuteAsync(async () =>
                             {
+                                // Проверяем загрузку CPU перед началом загрузки
+                                await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                                
                                 logger.LogInformation("Задача {JobId}: начинаем попытку загрузки", jobId);
                                 
                                 using var request = new HttpRequestMessage(HttpMethod.Get, videoUrl);
@@ -206,6 +212,12 @@ namespace FileConverter.Services.BackgroundServices
                                     {
                                         while ((bytesRead = await httpStream.ReadAsync(buffer, 0, buffer.Length, combinedCts.Token)) > 0)
                                         {
+                                            // Периодически проверяем загрузку CPU во время потоковой загрузки
+                                            if (totalBytesDownloaded % (1024 * 1024 * 10) == 0) // Каждые 10 МБ
+                                            {
+                                                await _cpuThrottleService.WaitIfNeededAsync(combinedCts.Token);
+                                            }
+                                            
                                             await fileStream.WriteAsync(buffer, 0, bytesRead, combinedCts.Token);
                                             totalBytesDownloaded += bytesRead;
                                             

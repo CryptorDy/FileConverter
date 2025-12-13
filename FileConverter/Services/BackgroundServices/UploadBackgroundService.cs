@@ -24,6 +24,7 @@ namespace FileConverter.Services.BackgroundServices
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
         private readonly MetricsCollector _metricsCollector;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentUploads;
 
         public UploadBackgroundService(
@@ -31,12 +32,14 @@ namespace FileConverter.Services.BackgroundServices
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
             MetricsCollector metricsCollector,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
             _metricsCollector = metricsCollector;
+            _cpuThrottleService = cpuThrottleService;
              _maxConcurrentUploads = configuration.GetValue("Performance:MaxConcurrentUploads", 5); 
              _logger.LogInformation("UploadBackgroundService инициализирован с {MaxConcurrentUploads} параллельными загрузками.", _maxConcurrentUploads);
         }
@@ -123,6 +126,9 @@ namespace FileConverter.Services.BackgroundServices
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Uploading);
                             
                             logger.LogInformation("Задача {JobId}: начало загрузки файлов в S3...", jobId);
+
+                            // Проверяем загрузку CPU перед началом загрузки
+                            await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
 
                             // Параллельно загружаем видео, MP3 и ключевые кадры в S3 с retry логикой
                             var videoUploadTask = UploadWithRetryAsync(storageService, videoPath, "video/mp4", logger, jobId);

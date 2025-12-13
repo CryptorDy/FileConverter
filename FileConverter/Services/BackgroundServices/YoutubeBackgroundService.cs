@@ -22,17 +22,20 @@ namespace FileConverter.Services
         private readonly ILogger<YoutubeBackgroundService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentDownloads;
 
         public YoutubeBackgroundService(
             ILogger<YoutubeBackgroundService> logger,
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
+            _cpuThrottleService = cpuThrottleService;
             _maxConcurrentDownloads = configuration.GetValue<int>("Performance:MaxConcurrentYoutubeDownloads", 3);
             // Логирование инициализации убрано для уменьшения количества логов
         }
@@ -138,6 +141,9 @@ namespace FileConverter.Services
                             continue;
                         }
 
+                        // Проверяем загрузку CPU перед началом скачивания и конвертации
+                        await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                        
                         // Скачиваем и конвертируем YouTube видео в MP3
                         mp3Path = await youtubeService.DownloadAndConvertToMp3Async(videoUrl, jobId, stoppingToken);
 

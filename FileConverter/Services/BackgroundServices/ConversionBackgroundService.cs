@@ -24,6 +24,7 @@ namespace FileConverter.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
         private readonly MetricsCollector _metricsCollector;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentConversions;
 
         public ConversionBackgroundService(
@@ -31,12 +32,14 @@ namespace FileConverter.Services
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
             MetricsCollector metricsCollector,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
             _metricsCollector = metricsCollector;
+            _cpuThrottleService = cpuThrottleService;
             // Максимальное количество параллельных конвертаций, не больше чем ядер CPU - 1 (минимум 1)
             _maxConcurrentConversions = configuration.GetValue<int>("Performance:MaxConcurrentConversions", Math.Max(1, Environment.ProcessorCount - 1));
              _logger.LogInformation("ConversionBackgroundService инициализирован с {MaxConcurrentConversions} параллельными конвертациями.", _maxConcurrentConversions);
@@ -161,6 +164,9 @@ namespace FileConverter.Services
                             // Выполняем конвертацию с retry
                             await retryPolicy.ExecuteAsync(async () =>
                             {
+                                // Проверяем загрузку CPU перед началом конвертации
+                                await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                                
                                 logger.LogInformation("Задача {JobId}: начинаем попытку FFmpeg конвертации", jobId);
                                 
                                 // Получаем информацию о медиафайле
@@ -229,6 +235,9 @@ namespace FileConverter.Services
                                     }
                                 };
 
+                                // Проверяем загрузку CPU перед запуском конвертации
+                                await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                                
                                 // Запускаем конвертацию с тайм-аутом
                                 using var timeoutCts = new CancellationTokenSource();
                                 using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, timeoutCts.Token);

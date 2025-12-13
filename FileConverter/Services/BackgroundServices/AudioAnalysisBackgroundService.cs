@@ -25,6 +25,7 @@ namespace FileConverter.Services
         private readonly IServiceProvider _serviceProvider;
         private readonly ProcessingChannels _channels;
         private readonly MetricsCollector _metricsCollector;
+        private readonly CpuThrottleService _cpuThrottleService;
         private readonly int _maxConcurrentAnalyses;
 
         public AudioAnalysisBackgroundService(
@@ -32,12 +33,14 @@ namespace FileConverter.Services
             IServiceProvider serviceProvider,
             ProcessingChannels channels,
             MetricsCollector metricsCollector,
+            CpuThrottleService cpuThrottleService,
             IConfiguration configuration)
         {
             _logger = logger;
             _serviceProvider = serviceProvider;
             _channels = channels;
             _metricsCollector = metricsCollector;
+            _cpuThrottleService = cpuThrottleService;
             // Количество параллельных анализов, по умолчанию равно количеству ядер CPU (минимум 1)
             _maxConcurrentAnalyses = configuration.GetValue<int>("Performance:MaxConcurrentAudioAnalyses", Math.Max(1, Environment.ProcessorCount));
         }
@@ -145,6 +148,9 @@ namespace FileConverter.Services
                             // Выполняем анализ аудио с retry
                             string analysisJsonResult = await retryPolicy.ExecuteAsync(async () =>
                             {
+                                // Проверяем загрузку CPU перед началом анализа
+                                await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
+                                
                                 _logger.LogInformation("Задача {JobId}: начинаем попытку анализа аудио", jobId);
                                 
                                 // Выполняем анализ аудио с защитой от сбоев native кода
