@@ -34,6 +34,19 @@ namespace FileConverter.Data
         }
         
         /// <inheritdoc/>
+        public async Task CreateLogBatchAsync(List<ConversionLogEvent> logEvents)
+        {
+            if (logEvents == null || logEvents.Count == 0)
+                return;
+                
+            await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
+            {
+                await dbContext.ConversionLogs.AddRangeAsync(logEvents);
+                await dbContext.SaveChangesAsync();
+            });
+        }
+        
+        /// <inheritdoc/>
         public async Task<List<ConversionLogEvent>> GetLogsByJobIdAsync(string jobId)
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>

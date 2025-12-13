@@ -110,6 +110,14 @@ builder.WebHost.ConfigureKestrel(options =>
     // Увеличиваем время ожидания для долгих операций
     options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(10);
     options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(5);
+    
+    // Увеличиваем лимиты на параллельные соединения (критично для частого polling)
+    options.Limits.MaxConcurrentConnections = 1000; // Было null (без лимита, но OS может ограничивать)
+    options.Limits.MaxConcurrentUpgradedConnections = 1000;
+    
+    // Ограничиваем очередь запросов (чтобы не накапливались зависшие)
+    options.Limits.MaxRequestHeaderCount = 100;
+    options.Limits.MaxRequestLineSize = 8192;
 });
 
 // Явное указание URL закомментировано, чтобы использовалась переменная окружения ASPNETCORE_URLS
@@ -193,7 +201,8 @@ builder.Services.AddScoped<IConversionLogRepository, ConversionLogRepository>();
 builder.Services.AddScoped<IS3StorageService, S3StorageService>();
 builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
-builder.Services.AddScoped<IConversionLogger, ConversionLogger>();
+// Используем батчинг-логгер для снижения нагрузки на БД
+builder.Services.AddSingleton<IConversionLogger, BatchedConversionLogger>();
 builder.Services.AddScoped<IJobRecoveryService, JobRecoveryService>();
 builder.Services.AddSingleton<IYoutubeDownloadService, YoutubeDownloadService>();
 builder.Services.AddSingleton<ProcessingChannels>();

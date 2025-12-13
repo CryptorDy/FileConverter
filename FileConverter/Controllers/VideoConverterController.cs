@@ -100,6 +100,9 @@ namespace FileConverter.Controllers
         {
             try
             {
+                // Таймаут для самого запроса статуса (чтобы не зависал при нехватке соединений к БД)
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                
                 // Получаем статусы отдельных задач из менеджера
                 var jobStatuses = await _jobManager.GetBatchStatus(batchId);
                 

@@ -15,6 +15,12 @@ namespace FileConverter.Data
         Task<ConversionLogEvent> AddLogAsync(ConversionLogEvent logEvent);
         
         /// <summary>
+        /// Добавляет пачку записей лога за одну транзакцию (для батчинга)
+        /// </summary>
+        /// <param name="logEvents">Список записей лога</param>
+        Task CreateLogBatchAsync(List<ConversionLogEvent> logEvents);
+        
+        /// <summary>
         /// Получает все логи для конкретной задачи
         /// </summary>
         /// <param name="jobId">Идентификатор задачи</param>

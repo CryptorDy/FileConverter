@@ -125,7 +125,7 @@ namespace FileConverter.Services.BackgroundServices
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Uploading);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Uploading);
                             
-                            logger.LogInformation("Задача {JobId}: начало загрузки файлов в S3...", jobId);
+                            // Убрали дублирующий лог (уже есть в conversionLogger.LogUploadStartedAsync)
 
                             // Проверяем загрузку CPU перед началом загрузки
                             await _cpuThrottleService.WaitIfNeededAsync(stoppingToken);
@@ -153,8 +153,7 @@ namespace FileConverter.Services.BackgroundServices
                                 keyframeInfos[i].Url = keyframeUrls[i];
                             }
                             
-                            logger.LogInformation("Задача {JobId}: файлы загружены. Видео URL: {VideoUrl}, MP3 URL: {Mp3Url}, Кадров: {KeyframeCount}", 
-                                jobId, videoUrl, mp3Url, keyframeInfos.Count);
+                            // Убрали дублирующий лог (уже есть в conversionLogger.LogUploadCompletedAsync)
                             await conversionLogger.LogUploadCompletedAsync(jobId, mp3Url);
                             await conversionLogger.LogSystemInfoAsync($"Файлы загружены для задания {jobId}. URL видео: {videoUrl}, URL MP3: {mp3Url}, ключевых кадров: {keyframeInfos.Count}");
 
@@ -171,7 +170,7 @@ namespace FileConverter.Services.BackgroundServices
                             };
                             
                             var savedItem = await mediaItemRepository.SaveItemAsync(mediaItem);
-                            logger.LogInformation("Задача {JobId}: медиа элемент сохранен в репозиторий MediaItems с ID: {MediaItemId}", jobId, savedItem.Id);
+                            // Убрали дублирующий лог
                             await conversionLogger.LogSystemInfoAsync($"Медиа элемент сохранен в хранилище C3 с ID: {savedItem.Id}");
 
                             // Сохраняем keyframes в ConversionJob
@@ -190,7 +189,7 @@ namespace FileConverter.Services.BackgroundServices
                             _metricsCollector.StopTimer("upload_files", jobId, isSuccess: true);
 
                             await conversionLogger.LogJobCompletedAsync(jobId, mp3Url, totalTimeMs);
-                            logger.LogInformation("Задача {JobId}: успешно завершена за {TotalTimeMs} мс.", jobId, totalTimeMs);
+                            // Убрали дублирующий лог
                              await conversionLogger.LogSystemInfoAsync($"Задание {jobId} успешно завершено");
                         }
                         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -240,7 +239,7 @@ namespace FileConverter.Services.BackgroundServices
                 try
                 {
                     tempFileManager.DeleteTempFile(path);
-                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап загрузки).", jobId, path);
+                    // Убрали дублирующий лог (слишком подробный для консоли)
                 }
                 catch (Exception ex)
                 {
