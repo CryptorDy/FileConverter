@@ -36,8 +36,8 @@ namespace FileConverter.Middleware
 
         private async Task HandleExceptionAsync(HttpContext context, Exception exception)
         {
-            // Логируем исключение
-            LogException(context, exception);
+            // Логируем исключение (без блокировок потоков)
+            await LogExceptionAsync(context, exception);
             
             // Создаем структуру ответа
             var response = context.Response;
@@ -91,10 +91,10 @@ namespace FileConverter.Middleware
             return exception.Message;
         }
 
-        private void LogException(HttpContext context, Exception exception)
+        private async Task LogExceptionAsync(HttpContext context, Exception exception)
         {
             var request = context.Request;
-            string requestBody = GetRequestBody(context);
+            string requestBody = await GetRequestBodyAsync(context);
             
             _logger.LogError(
                 exception,
@@ -113,19 +113,26 @@ namespace FileConverter.Middleware
             }
         }
 
-        private string GetRequestBody(HttpContext context)
+        private async Task<string> GetRequestBodyAsync(HttpContext context)
         {
             try
             {
                 // Пытаемся получить тело запроса, если оно доступно
                 var request = context.Request;
+                
+                // Не пытаемся читать потенциально огромные тела (например, upload), чтобы не создавать лишнюю нагрузку в обработчике ошибок
+                if (request.ContentLength.HasValue && request.ContentLength.Value > 64 * 1024)
+                {
+                    return $"[Тело запроса пропущено: {request.ContentLength.Value} bytes]";
+                }
+
                 request.EnableBuffering();
                 
                 if (request.Body.CanSeek)
                 {
                     request.Body.Position = 0;
                     using var reader = new StreamReader(request.Body, leaveOpen: true);
-                    var body = reader.ReadToEndAsync().Result;
+                    var body = await reader.ReadToEndAsync();
                     request.Body.Position = 0;
                     
                     // Ограничиваем длину тела для логирования

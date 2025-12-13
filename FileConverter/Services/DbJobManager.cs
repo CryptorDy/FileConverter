@@ -5,6 +5,7 @@ using FileConverter.Helpers;
 // using Hangfire; // Удаляем зависимость от Hangfire Client
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration; // Добавляем для Configuration
+using Microsoft.Extensions.Caching.Memory;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,6 +24,7 @@ namespace FileConverter.Services
         private readonly IConfiguration _configuration;
         private readonly IVideoConverter _videoConverter;
         private readonly UrlValidator _urlValidator;
+        private readonly IMemoryCache _memoryCache;
         
         public DbJobManager(
             IJobRepository repository,
@@ -32,7 +34,8 @@ namespace FileConverter.Services
             ILogger<DbJobManager> logger,
             IConfiguration configuration,
             IVideoConverter videoConverter,
-            UrlValidator urlValidator)
+            UrlValidator urlValidator,
+            IMemoryCache memoryCache)
         {
             _repository = repository;
             _mediaItemRepository = mediaItemRepository;
@@ -42,6 +45,7 @@ namespace FileConverter.Services
             _configuration = configuration;
             _videoConverter = videoConverter;
             _urlValidator = urlValidator;
+            _memoryCache = memoryCache;
         }
 
         public async Task<ConversionJobResponse> EnqueueConversionJob(string videoUrl)
@@ -216,49 +220,74 @@ namespace FileConverter.Services
 
         public async Task<JobStatusResponse> GetJobStatus(string jobId)
         {
-            var job = await _repository.GetJobByIdAsync(jobId);
-            
-            if (job == null)
+            if (string.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentException("jobId не может быть пустым", nameof(jobId));
+
+            var cacheKey = $"job-status:{jobId}";
+            if (_memoryCache.TryGetValue(cacheKey, out JobStatusResponse? cached) && cached != null)
             {
-                 throw new KeyNotFoundException($"Task with ID {jobId} not found");
+                return cached;
             }
-            
-            return new JobStatusResponse
+
+            // Сначала берем легкий статус без JSONB полей (чтобы polling не душил БД/сериализацию)
+            var light = await _repository.GetJobStatusResponseAsync(jobId, includeDetails: false);
+            if (light == null)
+                throw new KeyNotFoundException($"Task with ID {jobId} not found");
+
+            // Если задача завершена, можно вернуть детали (keyframes/audioAnalysis) — это реже и не так критично
+            JobStatusResponse result = light;
+            if (light.Status == ConversionStatus.Completed)
             {
-                JobId = job.Id,
-                Status = job.Status,
-                VideoUrl = job.VideoUrl, 
-                NewVideoUrl = job.NewVideoUrl, 
-                Mp3Url = job.Mp3Url,
-                Keyframes = job.Keyframes, // Используем данные прямо из БД
-                AudioAnalysis = job.AudioAnalysis, // Добавляем данные анализа аудио
-                ErrorMessage = job.ErrorMessage,
-                Progress = GetProgressFromStatus(job.Status) 
-            };
+                var detailed = await _repository.GetJobStatusResponseAsync(jobId, includeDetails: true);
+                if (detailed != null)
+                {
+                    result = detailed;
+                }
+            }
+
+            result.Progress = GetProgressFromStatus(result.Status);
+
+            // Короткий кэш, чтобы частые запросы статуса не создавали шторм по БД
+            _memoryCache.Set(cacheKey, result, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
+            });
+
+            return result;
         }
 
         public async Task<List<JobStatusResponse>> GetBatchStatus(string batchId)
         {
-            var jobs = await _repository.GetJobsByBatchIdAsync(batchId);
-            
-            if (!jobs.Any())
+            if (string.IsNullOrWhiteSpace(batchId))
+                throw new ArgumentException("batchId не может быть пустым", nameof(batchId));
+
+            var cacheKey = $"batch-status:{batchId}";
+            if (_memoryCache.TryGetValue(cacheKey, out List<JobStatusResponse>? cached) && cached != null)
+            {
+                return cached;
+            }
+
+            // Требование: возвращаем статусы вместе с JSONB (Keyframes/AudioAnalysis)
+            // При этом оставляем короткий кэш, чтобы частый polling не создавал шторм по БД/сериализации.
+            var jobs = await _repository.GetBatchStatusResponsesAsync(batchId, includeDetails: true);
+
+            if (jobs.Count == 0)
             {
                 _logger.LogInformation("Не найдено задач для пакета {BatchId}", batchId);
-                return new List<JobStatusResponse>(); 
+                return new List<JobStatusResponse>();
             }
-            
-            return jobs.Select(job => new JobStatusResponse
+
+            foreach (var j in jobs)
             {
-                JobId = job.Id,
-                Status = job.Status,
-                VideoUrl = job.VideoUrl,
-                NewVideoUrl = job.NewVideoUrl,
-                Mp3Url = job.Mp3Url,
-                Keyframes = job.Keyframes,
-                AudioAnalysis = job.AudioAnalysis, // Добавляем данные анализа аудио
-                ErrorMessage = job.ErrorMessage,
-                Progress = GetProgressFromStatus(job.Status)
-            }).ToList();
+                j.Progress = GetProgressFromStatus(j.Status);
+            }
+
+            _memoryCache.Set(cacheKey, jobs, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
+            });
+
+            return jobs;
         }
 
         public async Task<List<JobStatusResponse>> GetAllJobs(int skip = 0, int take = 20)

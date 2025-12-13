@@ -7,6 +7,11 @@ namespace FileConverter.Data
         // Задачи
         Task<ConversionJob> CreateJobAsync(ConversionJob job);
         Task<ConversionJob?> GetJobByIdAsync(string jobId);
+        
+        /// <summary>
+        /// Быстрое получение статуса задачи (с возможностью исключить тяжелые JSONB поля).
+        /// </summary>
+        Task<JobStatusResponse?> GetJobStatusResponseAsync(string jobId, bool includeDetails);
         Task<ConversionJob> UpdateJobAsync(ConversionJob job);
         Task<List<ConversionJob>> GetJobsByStatusAsync(ConversionStatus status, int take = 100);
         Task<List<ConversionJob>> GetAllJobsAsync(int skip = 0, int take = 20);
@@ -15,6 +20,11 @@ namespace FileConverter.Data
         Task<BatchJob> CreateBatchJobAsync(BatchJob batchJob);
         Task<BatchJob?> GetBatchJobByIdAsync(string batchId);
         Task<List<ConversionJob>> GetJobsByBatchIdAsync(string batchId);
+        
+        /// <summary>
+        /// Быстрое получение статусов всех задач в пакете (без тяжелых JSONB полей).
+        /// </summary>
+        Task<List<JobStatusResponse>> GetBatchStatusResponsesAsync(string batchId, bool includeDetails);
         Task<BatchJob> UpdateBatchJobAsync(BatchJob batchJob);
         
         // Специальные методы

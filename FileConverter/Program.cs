@@ -13,6 +13,8 @@ using FileConverter.Services.Interfaces;
 using FileConverter.BackgroundServices;
 using FileConverter.Services.BackgroundServices;
 using FileConverter.Helpers;
+using FileConverter.HealthChecks;
+using Microsoft.AspNetCore.ResponseCompression;
 // Регистрируем кодировку Windows-1251
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 var encoding = Encoding.GetEncoding(1251);
@@ -148,6 +150,23 @@ builder.Services.AddControllers()
         // Настраиваем сериализацию enum как строк
         options.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
     });
+
+// Сжатие ответов (важно для batch-status с JSONB, чтобы уменьшить время ответа и вероятность таймаутов у прокси)
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<BrotliCompressionProvider>();
+    options.Providers.Add<GzipCompressionProvider>();
+    options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Concat(new[] { "application/json" });
+});
+builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
+{
+    options.Level = System.IO.Compression.CompressionLevel.Fastest;
+});
+builder.Services.Configure<GzipCompressionProviderOptions>(options =>
+{
+    options.Level = System.IO.Compression.CompressionLevel.Fastest;
+});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -219,45 +238,8 @@ builder.Services.AddRateLimiter(options =>
 
 // Добавляем HealthChecks для мониторинга состояния приложения
 builder.Services.AddHealthChecks()
-    .AddCheck("Database", () => 
-    {
-        try
-        {
-            using var scope = builder.Services.BuildServiceProvider().CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            dbContext.Database.CanConnect();
-            return HealthCheckResult.Healthy("База данных доступна");
-        }
-        catch (Exception ex)
-        {
-            return HealthCheckResult.Unhealthy("Проблема с подключением к базе данных", ex);
-        }
-    }, tags: new[] { "database", "ready" })
-    .AddCheck("TempStorage", () =>
-    {
-        try
-        {
-            using var scope = builder.Services.BuildServiceProvider().CreateScope();
-            var tempManager = scope.ServiceProvider.GetRequiredService<ITempFileManager>();
-            var tempDir = tempManager.GetTempDirectory();
-            
-            if (!Directory.Exists(tempDir))
-            {
-                return HealthCheckResult.Degraded($"Директория временных файлов не существует: {tempDir}");
-            }
-            
-            // Проверяем, можно ли создать файл
-            var testFile = Path.Combine(tempDir, "healthcheck.tmp");
-            File.WriteAllText(testFile, "test");
-            File.Delete(testFile);
-            
-            return HealthCheckResult.Healthy("Хранилище временных файлов доступно");
-        }
-        catch (Exception ex)
-        {
-            return HealthCheckResult.Unhealthy("Проблема с хранилищем временных файлов", ex);
-        }
-    }, tags: new[] { "storage", "ready" });
+    .AddCheck<DatabaseHealthCheck>("Database", tags: new[] { "database", "ready" })
+    .AddCheck<TempStorageHealthCheck>("TempStorage", tags: new[] { "storage", "ready" });
 
 // Настройка параметров приложения
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("AppSettings"));
@@ -328,6 +310,9 @@ using (var scope = app.Services.CreateScope())
 
 // Глобальная обработка исключений
 app.UseGlobalExceptionHandler();
+
+// Сжатие ответов
+app.UseResponseCompression();
 
 // Профилирование HTTP запросов
 app.UseRequestProfiling();
