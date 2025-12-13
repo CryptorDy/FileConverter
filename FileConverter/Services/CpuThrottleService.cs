@@ -18,7 +18,7 @@ namespace FileConverter.Services
         private readonly int _monitoringIntervalMs;
         private readonly int _checkIntervalMs;
         
-        private volatile double _currentCpuUsage = 0;
+        private double _currentCpuUsage = 0; // Не используем volatile для double, используем lock для синхронизации
         private readonly Process _currentProcess;
         private DateTime _lastCpuCheck = DateTime.UtcNow;
         private TimeSpan _lastCpuTime;
@@ -135,7 +135,11 @@ namespace FileConverter.Services
                 UpdateCpuUsage();
             }
             
-            return _currentCpuUsage;
+            // Безопасное чтение с использованием lock
+            lock (_updateLock)
+            {
+                return _currentCpuUsage;
+            }
         }
         
         /// <summary>
