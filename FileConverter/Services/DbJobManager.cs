@@ -250,7 +250,8 @@ namespace FileConverter.Services
             // Короткий кэш, чтобы частые запросы статуса не создавали шторм по БД
             _memoryCache.Set(cacheKey, result, new MemoryCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1),
+                Size = 1 // Указываем размер для MemoryCache с SizeLimit
             });
 
             return result;
@@ -284,7 +285,8 @@ namespace FileConverter.Services
 
             _memoryCache.Set(cacheKey, jobs, new MemoryCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1)
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1),
+                Size = jobs.Count // Размер = количество задач в пакете
             });
 
             return jobs;
