@@ -277,7 +277,6 @@ namespace FileConverter.Services.BackgroundServices
                             // Вычисляем хеш видео по содержимому файла
                             // Для всех файлов (включая S3) используем хеширование содержимого для корректного кэширования
                             string videoHash = VideoHasher.GetHash(fileData);
-                            logger.LogInformation("Задача {JobId}: хеш видео {VideoHash} (источник: {Source})", jobId, videoHash, sourceDescription);
 
                             // Проверяем кэш по реальному хешу файла
                             var mediaItemRepository = scope.ServiceProvider.GetRequiredService<IMediaItemRepository>();
@@ -286,8 +285,6 @@ namespace FileConverter.Services.BackgroundServices
                                 var existingItem = await mediaItemRepository.FindByVideoHashAsync(videoHash);
                                 if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
                                 {
-                                    logger.LogInformation("Задача {JobId}: Найден кэш по хешу файла {VideoHash}. URL: {AudioUrl}", 
-                                        jobId, videoHash, existingItem.AudioUrl);
                                     await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
                                     
                                     // Обновляем статус задачи на Completed с данными из кэша
@@ -299,16 +296,12 @@ namespace FileConverter.Services.BackgroundServices
                                     if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
                                     {
                                         await jobRepository.UpdateJobKeyframesAsync(jobId, existingItem.Keyframes);
-                                        logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
-                                            jobId, existingItem.Keyframes.Count);
                                     }
                                     
                                     // Сохраняем данные анализа аудио если они есть
                                     if (existingItem.AudioAnalysis != null)
                                     {
                                         await jobRepository.UpdateJobAudioAnalysisAsync(jobId, existingItem.AudioAnalysis);
-                                        logger.LogInformation("Задача {JobId}: Сохранены данные анализа аудио из кэша: BPM {Bpm}", 
-                                            jobId, existingItem.AudioAnalysis.tempo_bpm);
                                     }
                                     
                                     // Останавливаем таймер для метрик (кэш-попадание)
@@ -333,7 +326,6 @@ namespace FileConverter.Services.BackgroundServices
                             bool conversionQueueSuccess = _channels.ConversionChannel.Writer.TryWrite((jobId, videoPath, videoHash));
                             if (conversionQueueSuccess)
                             {
-                                logger.LogInformation("Задача {JobId}: передана в очередь конвертации (файл {VideoPath}, хеш {VideoHash})", jobId, videoPath, videoHash);
                                 await conversionLogger.LogSystemInfoAsync($"Задание {jobId} добавлено в очередь на конвертацию с хешем видео: {videoHash}");
                             }
                             else
@@ -479,7 +471,6 @@ namespace FileConverter.Services.BackgroundServices
                 try
                 {
                     tempFileManager.DeleteTempFile(path);
-                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален.", jobId, path);
                 }
                 catch (Exception ex)
                 {

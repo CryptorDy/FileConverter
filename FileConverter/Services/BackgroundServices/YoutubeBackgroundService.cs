@@ -106,8 +106,6 @@ namespace FileConverter.Services
                         // Если есть, то обновляем задачи
                         if (existingItem != null && !string.IsNullOrEmpty(existingItem.AudioUrl))
                         {
-                            logger.LogInformation("Задача {JobId}: найдена готовая конвертация (хеш {VideoHash}), MP3: {AudioUrl}, Кадров: {KeyframeCount}", 
-                                jobId, videoHash, existingItem.AudioUrl, existingItem.Keyframes?.Count ?? 0);
                             await conversionLogger.LogCacheHitAsync(jobId, existingItem.AudioUrl, videoHash);
 
                             job = await jobRepository.GetJobByIdAsync(jobId);
@@ -124,8 +122,6 @@ namespace FileConverter.Services
                                 if (existingItem.Keyframes != null && existingItem.Keyframes.Count > 0)
                                 {
                                     job.Keyframes = existingItem.Keyframes;
-                                    logger.LogInformation("Задача {JobId}: Сохранены ключевые кадры из кэша: {KeyframeCount} кадров", 
-                                        jobId, existingItem.Keyframes.Count);
                                 }
                                 
                                 await jobRepository.UpdateJobAsync(job);
@@ -208,7 +204,6 @@ namespace FileConverter.Services
                 try
                 {
                     tempFileManager.DeleteTempFile(path);
-                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап YouTube).", jobId, path);
                 }
                 catch (Exception ex)
                 {

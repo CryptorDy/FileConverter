@@ -305,7 +305,6 @@ namespace FileConverter.Services
                 try
                 {
                     tempFileManager.DeleteTempFile(path);
-                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап анализа аудио).", jobId, path);
                 }
                 catch (Exception ex)
                 {

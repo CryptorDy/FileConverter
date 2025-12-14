@@ -19,7 +19,6 @@ namespace FileConverter.Services
             try
             {
                 tempFileManager.DeleteTempFile(filePath);
-                logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап {Stage}).", jobId, filePath, stage);
             }
             catch (Exception ex)
             {
@@ -52,7 +51,6 @@ namespace FileConverter.Services
             try
             {
                 tempFileManager.DeleteTempFile(filePath);
-                logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап {Stage}).", jobId, filePath, stage);
                 await conversionLogger.LogSystemInfoAsync($"Временный файл удален ({stage}): {Path.GetFileName(filePath)}");
             }
             catch (Exception ex)

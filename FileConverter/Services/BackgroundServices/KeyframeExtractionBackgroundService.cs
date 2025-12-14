@@ -310,7 +310,6 @@ namespace FileConverter.Services.BackgroundServices
                 try
                 {
                     tempFileManager.DeleteTempFile(path);
-                    logger.LogInformation("Задача {JobId}: Временный файл {Path} удален (этап извлечения кадров).", jobId, path);
                 }
                 catch (Exception ex)
                 {
