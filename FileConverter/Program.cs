@@ -107,13 +107,13 @@ builder.WebHost.ConfigureKestrel(options =>
     // Увеличиваем максимальный размер тела запроса до 100 МБ
     options.Limits.MaxRequestBodySize = 104857600; // 100 MB
     
-    // Увеличиваем время ожидания для долгих операций
-    options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(10);
-    options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(5);
+    // Уменьшаем KeepAliveTimeout до разумных значений (обычно 2-3 минуты), 
+    // чтобы не конфликтовать с прокси (у которых часто 60-120 сек)
+    options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(2);
+    options.Limits.RequestHeadersTimeout = TimeSpan.FromMinutes(1);
     
-    // Увеличиваем лимиты на параллельные соединения (критично для частого polling)
-    options.Limits.MaxConcurrentConnections = 1000; // Было null (без лимита, но OS может ограничивать)
-    options.Limits.MaxConcurrentUpgradedConnections = 1000;
+    // Убираем жесткий лимит соединений, полагаемся на OS
+    // options.Limits.MaxConcurrentConnections = 1000; 
     
     // Ограничиваем очередь запросов (чтобы не накапливались зависшие)
     options.Limits.MaxRequestHeaderCount = 100;
@@ -230,12 +230,16 @@ builder.Services.AddRateLimiter(options =>
             factory: partition => new FixedWindowRateLimiterOptions
             {
                 AutoReplenishment = true,
-                PermitLimit = 100, // Максимум 100 запросов
-                Window = TimeSpan.FromMinutes(1) // В течение 1 минуты
+                PermitLimit = 10000, // Увеличиваем лимит до 10000 запросов/минуту (фактически отключаем для внутреннего трафика)
+                Window = TimeSpan.FromMinutes(1) 
             }));
     
     options.OnRejected = async (context, token) =>
     {
+        // Логируем реджект, чтобы знать, если лимит все же достигнут
+        var logger = context.HttpContext.RequestServices.GetService<ILogger<Program>>();
+        logger?.LogWarning("Rate limit exceeded for {Ip}", context.HttpContext.Connection.RemoteIpAddress);
+        
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         context.HttpContext.Response.ContentType = "application/json";
         
