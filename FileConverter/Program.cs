@@ -183,8 +183,10 @@ builder.Services.AddSwaggerGen();
 // Используем кэширование в памяти с продвинутыми настройками
 builder.Services.AddMemoryCache(options =>
 {
-    // Лимит на размер кэша (в записях)
-    options.SizeLimit = builder.Configuration.GetValue<long>("Caching:MemoryCacheSize", 2000);
+    // Убираем жесткий лимит на размер, чтобы не требовать указания Size для каждой записи.
+    // При коротком времени жизни записей (1 сек для статусов) память не должна утекать.
+    // options.SizeLimit = builder.Configuration.GetValue<long>("Caching:MemoryCacheSize", 2000);
+    
     // Сканирование для удаления просроченных записей
     options.ExpirationScanFrequency = TimeSpan.FromMinutes(
         builder.Configuration.GetValue<double>("Caching:ExpirationScanFrequencyMinutes", 30));
