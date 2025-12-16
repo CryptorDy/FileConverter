@@ -301,6 +301,7 @@ namespace FileConverter.Services
                 VideoUrl = j.VideoUrl, 
                 NewVideoUrl = j.NewVideoUrl,
                 Mp3Url = j.Mp3Url,
+                AssemblyAiAudioUrl = j.AssemblyAiAudioUrl,
                 Keyframes = j.Keyframes,
                 AudioAnalysis = j.AudioAnalysis, // Добавляем данные анализа аудио
                 ErrorMessage = j.ErrorMessage,
@@ -345,16 +346,17 @@ namespace FileConverter.Services
             ConversionStatus status, 
             string? mp3Url = null, 
             string? newVideoUrl = null,
-            string? errorMessage = null)
+            string? errorMessage = null,
+            string? assemblyAiAudioUrl = null)
         {
             using var scope = ServiceActivator.GetScope(); // Пытаемся получить scope
             ILogger? logger = scope?.ServiceProvider.GetService<ILogger<DbJobManager>>(); // Получаем логгер из scope;
             try
             {
-                 logger?.LogDebug("Обновление статуса задачи {JobId} на {Status}. Mp3Url: {Mp3Url}, NewVideoUrl: {NewVideoUrl}, Ошибка: {Error}", 
-                    jobId, status, mp3Url ?? "N/A", newVideoUrl ?? "N/A", errorMessage ?? "нет");
+                 logger?.LogDebug("Обновление статуса задачи {JobId} на {Status}. Mp3Url: {Mp3Url}, NewVideoUrl: {NewVideoUrl}, AssemblyAiAudioUrl: {AssemblyAiAudioUrl}, Ошибка: {Error}", 
+                    jobId, status, mp3Url ?? "N/A", newVideoUrl ?? "N/A", assemblyAiAudioUrl ?? "N/A", errorMessage ?? "нет");
 
-                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, errorMessage);
+                await repository.UpdateJobStatusAsync(jobId, status, mp3Url, newVideoUrl, errorMessage, assemblyAiAudioUrl);
             }
             catch (ObjectDisposedException ex)
             {

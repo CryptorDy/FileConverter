@@ -10,6 +10,10 @@ namespace FileConverter.Models
         public string VideoUrl { get; set; } = string.Empty;
         public string? AudioUrl { get; set; }
         /// <summary>
+        /// URL аудио файла в AssemblyAI (upload_url)
+        /// </summary>
+        public string? AssemblyAiAudioUrl { get; set; }
+        /// <summary>
         /// Информация о ключевых кадрах с таймкодами
         /// </summary>
         public List<KeyframeInfo>? Keyframes { get; set; }

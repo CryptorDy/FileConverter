@@ -213,7 +213,6 @@ namespace FileConverter.Services
                     File.Delete(_pythonScriptPath);
                 }
                 
-                _logger.LogInformation("AudioAnalyzer ресурсы освобождены");
             }
             catch (Exception ex)
             {

@@ -128,7 +128,6 @@ namespace FileConverter.Services
                 if (IsInTempDirectory(filePath))
                 {
                     File.Delete(filePath);
-                    _logger.LogInformation($"Temporary file deleted: {filePath}");
                 }
                 else
                 {

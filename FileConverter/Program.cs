@@ -197,6 +197,7 @@ builder.Services.AddScoped<IJobRepository, JobRepository>();
 builder.Services.AddScoped<IMediaItemRepository, MediaItemRepository>();
 builder.Services.AddScoped<IConversionLogRepository, ConversionLogRepository>();
 builder.Services.AddScoped<IS3StorageService, S3StorageService>();
+builder.Services.AddScoped<FileConverter.Services.Interfaces.IAssemblyAIStorageService, AssemblyAIStorageService>();
 builder.Services.AddScoped<IJobManager, DbJobManager>();
 builder.Services.AddScoped<IVideoConverter, VideoConverter>();
 // Используем батчинг-логгер для снижения нагрузки на БД

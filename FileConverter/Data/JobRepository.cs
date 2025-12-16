@@ -37,43 +37,25 @@ namespace FileConverter.Data
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
             {
-                var baseQuery = dbContext.ConversionJobs
+                var job = await dbContext.ConversionJobs
                     .AsNoTracking()
-                    .Where(j => j.Id == jobId);
+                    .FirstOrDefaultAsync(j => j.Id == jobId);
 
-                if (includeDetails)
+                if (job == null) return null;
+
+                return new JobStatusResponse
                 {
-                    return await baseQuery
-                        .Select(j => new JobStatusResponse
-                        {
-                            JobId = j.Id,
-                            Status = j.Status,
-                            VideoUrl = j.VideoUrl,
-                            NewVideoUrl = j.NewVideoUrl,
-                            Mp3Url = j.Mp3Url,
-                            Keyframes = j.Keyframes,
-                            AudioAnalysis = j.AudioAnalysis,
-                            ErrorMessage = j.ErrorMessage,
-                            Progress = 0
-                        })
-                        .FirstOrDefaultAsync();
-                }
-
-                // Легкий ответ: не тянем тяжелые JSONB поля (Keyframes/AudioAnalysis)
-                return await baseQuery
-                    .Select(j => new JobStatusResponse
-                    {
-                        JobId = j.Id,
-                        Status = j.Status,
-                        VideoUrl = j.VideoUrl,
-                        NewVideoUrl = j.NewVideoUrl,
-                        Mp3Url = j.Mp3Url,
-                        Keyframes = null,
-                        AudioAnalysis = null,
-                        ErrorMessage = j.ErrorMessage,
-                        Progress = 0
-                    })
-                    .FirstOrDefaultAsync();
+                    JobId = job.Id,
+                    Status = job.Status,
+                    VideoUrl = job.VideoUrl,
+                    NewVideoUrl = job.NewVideoUrl,
+                    Mp3Url = job.Mp3Url,
+                    AssemblyAiAudioUrl = job.AssemblyAiAudioUrl,
+                    Keyframes = includeDetails ? job.Keyframes : null,
+                    AudioAnalysis = includeDetails ? job.AudioAnalysis : null,
+                    ErrorMessage = job.ErrorMessage,
+                    Progress = 0
+                };
             });
         }
 
@@ -148,7 +130,8 @@ namespace FileConverter.Data
             ConversionStatus status, 
             string? mp3Url, 
             string? newVideoUrl,
-            string? errorMessage)
+            string? errorMessage,
+            string? assemblyAiAudioUrl = null)
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
             {
@@ -163,6 +146,11 @@ namespace FileConverter.Data
                 
                 job.NewVideoUrl = newVideoUrl ?? job.NewVideoUrl;
                 job.Mp3Url = mp3Url ?? job.Mp3Url;
+                
+                if (assemblyAiAudioUrl != null)
+                {
+                    job.AssemblyAiAudioUrl = assemblyAiAudioUrl;
+                }
                 
                 if (errorMessage != null)
                 {
@@ -247,36 +235,25 @@ namespace FileConverter.Data
         {
             return await _dbContextFactory.ExecuteWithDbContextAsync(async dbContext =>
             {
-                return await dbContext.ConversionJobs
+                var jobs = await dbContext.ConversionJobs
                     .AsNoTracking()
                     .Where(j => j.BatchId == batchId)
                     .OrderBy(j => j.CreatedAt)
-                    .Select(j => includeDetails
-                        ? new JobStatusResponse
-                        {
-                            JobId = j.Id,
-                            Status = j.Status,
-                            VideoUrl = j.VideoUrl,
-                            NewVideoUrl = j.NewVideoUrl,
-                            Mp3Url = j.Mp3Url,
-                            Keyframes = j.Keyframes,
-                            AudioAnalysis = j.AudioAnalysis,
-                            ErrorMessage = j.ErrorMessage,
-                            Progress = 0
-                        }
-                        : new JobStatusResponse
-                        {
-                            JobId = j.Id,
-                            Status = j.Status,
-                            VideoUrl = j.VideoUrl,
-                            NewVideoUrl = j.NewVideoUrl,
-                            Mp3Url = j.Mp3Url,
-                            Keyframes = null,
-                            AudioAnalysis = null,
-                            ErrorMessage = j.ErrorMessage,
-                            Progress = 0
-                        })
                     .ToListAsync();
+
+                return jobs.Select(j => new JobStatusResponse
+                {
+                    JobId = j.Id,
+                    Status = j.Status,
+                    VideoUrl = j.VideoUrl,
+                    NewVideoUrl = j.NewVideoUrl,
+                    Mp3Url = j.Mp3Url,
+                    AssemblyAiAudioUrl = j.AssemblyAiAudioUrl,
+                    Keyframes = includeDetails ? j.Keyframes : null,
+                    AudioAnalysis = includeDetails ? j.AudioAnalysis : null,
+                    ErrorMessage = j.ErrorMessage,
+                    Progress = 0
+                }).ToList();
             });
         }
         

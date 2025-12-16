@@ -19,6 +19,11 @@ namespace FileConverter.Models
         public string? Mp3Url { get; set; }
         
         /// <summary>
+        /// URL аудио файла в AssemblyAI (upload_url)
+        /// </summary>
+        public string? AssemblyAiAudioUrl { get; set; }
+        
+        /// <summary>
         /// Информация о ключевых кадрах с таймкодами
         /// </summary>
         [Column(TypeName = "jsonb")]

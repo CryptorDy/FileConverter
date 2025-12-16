@@ -33,7 +33,8 @@ namespace FileConverter.Data
             ConversionStatus status, 
             string? mp3Url = null, 
             string? newVideoUrl = null,
-            string? errorMessage = null);
+            string? errorMessage = null,
+            string? assemblyAiAudioUrl = null);
         Task<int> GetPendingJobsCountAsync();
         Task<bool> AnyJobsInProcessingAsync();
         Task UpdateJobDurationAsync(string jobId, double durationSeconds);

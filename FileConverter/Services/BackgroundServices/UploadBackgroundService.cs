@@ -86,6 +86,7 @@ namespace FileConverter.Services.BackgroundServices
                         var jobRepository = scope.ServiceProvider.GetRequiredService<IJobRepository>();
                         var conversionLogger = scope.ServiceProvider.GetRequiredService<IConversionLogger>();
                         var storageService = scope.ServiceProvider.GetRequiredService<IS3StorageService>();
+                        var assemblyAiStorageService = scope.ServiceProvider.GetRequiredService<FileConverter.Services.Interfaces.IAssemblyAIStorageService>();
                         var mediaItemRepository = scope.ServiceProvider.GetRequiredService<IMediaItemRepository>();
                         var tempFileManager = scope.ServiceProvider.GetRequiredService<ITempFileManager>();
                         var logger = scope.ServiceProvider.GetRequiredService<ILogger<UploadBackgroundService>>();
@@ -134,9 +135,11 @@ namespace FileConverter.Services.BackgroundServices
                             var videoUploadTask = UploadWithRetryAsync(storageService, videoPath, "video/mp4", logger, jobId);
                             var mp3UploadTask = UploadWithRetryAsync(storageService, mp3Path, "audio/mpeg", logger, jobId);
                             var keyframesUploadTasks = keyframeInfos.Select(k => UploadWithRetryAsync(storageService, k.Url, "image/jpeg", logger, jobId)).ToList();
+                            // Параллельно загружаем MP3 в AssemblyAI
+                            var mp3AssemblyAiUploadTask = UploadToAssemblyAIWithRetryAsync(assemblyAiStorageService, mp3Path, "audio/mpeg", logger, jobId);
 
                             // Объединяем все загрузки в одну группу для оптимальной параллельной обработки
-                            var allUploadTasks = new List<Task<string>> { videoUploadTask, mp3UploadTask };
+                            var allUploadTasks = new List<Task<string>> { videoUploadTask, mp3UploadTask, mp3AssemblyAiUploadTask };
                             allUploadTasks.AddRange(keyframesUploadTasks);
                             
                             // Ожидаем завершения всех задач загрузки одновременно
@@ -145,7 +148,8 @@ namespace FileConverter.Services.BackgroundServices
                             // Разбираем результаты
                             var videoUrl = allUrls[0]; // URL видео в S3
                             var mp3Url = allUrls[1]; // URL MP3 в S3
-                            var keyframeUrls = allUrls.Skip(2).ToList(); // URLs ключевых кадров
+                            var assemblyAiAudioUrl = allUrls[2]; // URL MP3 в AssemblyAI
+                            var keyframeUrls = allUrls.Skip(3).ToList(); // URLs ключевых кадров
                             
                             // Обновляем URL-ы в keyframeInfos после загрузки
                             for (int i = 0; i < keyframeInfos.Count && i < keyframeUrls.Count; i++)
@@ -155,7 +159,7 @@ namespace FileConverter.Services.BackgroundServices
                             
                             // Убрали дублирующий лог (уже есть в conversionLogger.LogUploadCompletedAsync)
                             await conversionLogger.LogUploadCompletedAsync(jobId, mp3Url);
-                            await conversionLogger.LogSystemInfoAsync($"Файлы загружены для задания {jobId}. URL видео: {videoUrl}, URL MP3: {mp3Url}, ключевых кадров: {keyframeInfos.Count}");
+                            await conversionLogger.LogSystemInfoAsync($"Файлы загружены для задания {jobId}. URL видео: {videoUrl}, URL MP3: {mp3Url}, AssemblyAI MP3: {assemblyAiAudioUrl}, ключевых кадров: {keyframeInfos.Count}");
 
                             // Сохраняем информацию о файлах в репозиторий MediaItems
                             var mediaItem = new MediaStorageItem
@@ -163,6 +167,7 @@ namespace FileConverter.Services.BackgroundServices
                                 VideoHash = videoHash,
                                 VideoUrl = videoUrl,
                                 AudioUrl = mp3Url,
+                                AssemblyAiAudioUrl = assemblyAiAudioUrl, // URL аудио в AssemblyAI
                                 Keyframes = keyframeInfos, // Добавляем информацию с таймкодами
                                 FileSizeBytes = job.FileSizeBytes ?? 0, // Берем размер из задачи
                                 DurationSeconds = job.DurationSeconds, // Сохраняем длительность видео
@@ -179,7 +184,8 @@ namespace FileConverter.Services.BackgroundServices
                             // Обновляем статус задачи на Completed
                             await DbJobManager.UpdateJobStatusAsync(jobRepository, jobId, ConversionStatus.Completed, 
                                 mp3Url: mp3Url, 
-                                newVideoUrl: videoUrl);
+                                newVideoUrl: videoUrl,
+                                assemblyAiAudioUrl: assemblyAiAudioUrl);
                             await conversionLogger.LogStatusChangedAsync(jobId, ConversionStatus.Completed);
 
                             // Вычисляем общее время выполнения задачи
@@ -189,8 +195,7 @@ namespace FileConverter.Services.BackgroundServices
                             _metricsCollector.StopTimer("upload_files", jobId, isSuccess: true);
 
                             await conversionLogger.LogJobCompletedAsync(jobId, mp3Url, totalTimeMs);
-                            // Убрали дублирующий лог
-                             await conversionLogger.LogSystemInfoAsync($"Задание {jobId} успешно завершено");
+                            await conversionLogger.LogSystemInfoAsync($"Задание {jobId} успешно завершено");
                         }
                         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                         {
@@ -287,6 +292,25 @@ namespace FileConverter.Services.BackgroundServices
                             jobId, retryCount, maxRetries, Path.GetFileName(filePath), timeSpan.TotalMilliseconds, exception.Message);
                     })
                 .ExecuteAsync(() => storageService.UploadFileAsync(filePath, contentType));
+        }
+
+        /// <summary>
+        /// Загружает файл в AssemblyAI с retry логикой (3 попытки с экспоненциальным backoff)
+        /// </summary>
+        private static async Task<string> UploadToAssemblyAIWithRetryAsync(FileConverter.Services.Interfaces.IAssemblyAIStorageService assemblyAiStorageService, string filePath, string contentType, ILogger logger, string jobId)
+        {
+            const int maxRetries = 3;
+            var baseDelay = TimeSpan.FromSeconds(1);
+            
+            return await Policy
+                .Handle<Exception>()
+                .WaitAndRetryAsync(maxRetries, attempt => TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1)),
+                    (exception, timeSpan, retryCount, context) =>
+                    {
+                        logger.LogWarning("Задача {JobId}: Попытка {RetryCount}/{MaxRetries} загрузки {FilePath} в AssemblyAI неудачна. Повтор через {Delay}мс. Ошибка: {Error}", 
+                            jobId, retryCount, maxRetries, Path.GetFileName(filePath), timeSpan.TotalMilliseconds, exception.Message);
+                    })
+                .ExecuteAsync(() => assemblyAiStorageService.UploadFileAsync(filePath, contentType));
         }
     }
 } 
